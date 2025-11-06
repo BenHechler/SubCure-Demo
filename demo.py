@@ -5,28 +5,27 @@ from sklearn.linear_model import LinearRegression
 
 st.set_page_config(page_title="SubCure Demo", layout="wide")
 
-st.title("SubCure Demo")  # - Causal ATE  - Cardinality Repair
+st.title("SubCure Demo")
 
 st.markdown(
     """
-This is a demo for the **“Stress-Testing Causal Claims via Cardinality Repairs”** paper.
+A minimal demo for **“Stress-Testing Causal Claims via Cardinality Repairs”**.
 
-**Flow**:
+**Flow**
 1. Choose dataset  
-2. Pick treatment / outcome / confounders  
+2. Select treatment, outcome, confounders  
 3. Compute ATE  
-4. Set desired ATE range  
-5. **Choose algorithm** (tuple-level vs pattern-level)  
-6. Run the chosen algorithm to push ATE into the desired range
+4. Set target ATE range  
+5. Choose repair algorithm (tuple-level or pattern-level)  
+6. Run the repair and inspect removed data
 """
 )
 
-# ------------------------------------------------------------
-# 1) DATASETS
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Load example datasets
+# ---------------------------------------------------------------------
 @st.cache_data
 def load_twins_dataset():
-    # synthetic dataset with binary disability and wages
     np.random.seed(42)
     n = 500
     treatment = np.random.binomial(1, 0.7, size=n)
@@ -36,15 +35,12 @@ def load_twins_dataset():
     treatment_effect = 6000
     noise = np.random.normal(0, 4000, size=n)
     wage = base + treatment * treatment_effect + noise
-    df = pd.DataFrame(
-        {
-            "no_disability": treatment,
-            "wage": wage,
-            "edu_years": edu_years,
-            "age": age,
-        }
-    )
-    return df
+    return pd.DataFrame({
+        "no_disability": treatment,
+        "wage": wage,
+        "edu_years": edu_years,
+        "age": age,
+    })
 
 
 @st.cache_data
@@ -56,246 +52,140 @@ def load_ACS_dataset():
     age = np.random.randint(18, 80, size=n)
     base = 20 + 3 * severity + 0.1 * (age - 40)
     outcome = base - 2 * got_treatment + np.random.normal(0, 1.5, size=n)
-    df = pd.DataFrame(
-        {
-            "got_treatment": got_treatment,
-            "recovery_days": outcome,
-            "severity": severity,
-            "age": age,
-        }
-    )
-    return df
+    return pd.DataFrame({
+        "got_treatment": got_treatment,
+        "recovery_days": outcome,
+        "severity": severity,
+        "age": age,
+    })
 
 
-dataset_name = st.sidebar.selectbox(
-    "Choose a dataset",
-    ["Twins", "ACS", "Upload CSV"],
-)
-
+dataset_name = st.sidebar.selectbox("Choose dataset", ["Twins", "ACS", "Upload CSV"])
 if dataset_name == "Twins":
     df = load_twins_dataset()
 elif dataset_name == "ACS":
     df = load_ACS_dataset()
 else:
     uploaded = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
-    if uploaded is not None:
-        df = pd.read_csv(uploaded)
-    else:
-        st.warning("Please upload a CSV to continue.")
+    if uploaded is None:
         st.stop()
+    df = pd.read_csv(uploaded)
 
 st.subheader("Dataset preview")
 st.dataframe(df.head())
 
-# ------------------------------------------------------------
-# 2) COLUMN SELECTION
-# ------------------------------------------------------------
-st.subheader("Select columns for causal estimate")
-
+# ---------------------------------------------------------------------
+# Column selection
+# ---------------------------------------------------------------------
 all_cols = list(df.columns)
-
-treatment_col = st.selectbox("Treatment (must be binary 0/1)", all_cols)
+treatment_col = st.selectbox("Treatment (binary 0/1)", all_cols)
 outcome_col = st.selectbox("Outcome (numeric)", all_cols, index=min(1, len(all_cols) - 1))
+confounders = st.multiselect(
+    "Confounders (optional)",
+    [c for c in all_cols if c not in [treatment_col, outcome_col]],
+    default=[],
+)
 
-possible_confounders = [c for c in all_cols if c not in [treatment_col, outcome_col]]
-confounders = st.multiselect("Confounders (optional)", possible_confounders, default=[])
-
-
-def compute_ate_linear(data: pd.DataFrame, treat: str, outcome: str, confs: list[str]):
-    """
-    ATE = coefficient of treatment in linear regression: outcome ~ treatment + confounders
-    """
-    cols_x = [treat] + confs
-    X = data[cols_x].values
+def compute_ate_linear(data, treat, outcome, confs):
+    X = data[[treat] + confs].values
     y = data[outcome].values
     mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
-    X = X[mask]
-    y = y[mask]
-    if X.shape[0] == 0:
+    X, y = X[mask], y[mask]
+    if len(y) == 0:
         return np.nan
-    model = LinearRegression()
-    model.fit(X, y)
-    ate = model.coef_[0]  # treatment is first
-    return ate
+    model = LinearRegression().fit(X, y)
+    return model.coef_[0]
 
-
-if st.button("Compute ATE on current data"):
+if st.button("Compute ATE"):
     ate_val = compute_ate_linear(df, treatment_col, outcome_col, confounders)
-    st.success(f"Current ATE (treatment coefficient) = **{ate_val:.4f}**")
+    st.success(f"Current ATE = **{ate_val:.4f}**")
 
-# ------------------------------------------------------------
-# 3) DESIRED ATE RANGE
-# ------------------------------------------------------------
-st.subheader("Causal repair")
-
+# ---------------------------------------------------------------------
+# Target range and algorithm
+# ---------------------------------------------------------------------
 current_ate = compute_ate_linear(df, treatment_col, outcome_col, confounders)
-st.write(f"Current ATE: **{current_ate:.4f}**")
-
-desired_center = st.number_input(
-    "Desired ATE center (target)", value=float(np.round(current_ate, 3))
-)
+desired_center = st.number_input("Desired ATE center", value=float(np.round(current_ate, 3)))
 tolerance = st.number_input("Tolerance (±)", value=0.5, min_value=0.0, step=0.1)
-
-# ------------------------------------------------------------
-# 4) CHOOSE ALGORITHM (from the article: tuple-level / pattern-level)
-# ------------------------------------------------------------
 algorithm = st.selectbox(
     "Choose repair algorithm",
-    [
-        "Tuple-level (remove individual rows)",
-        "Pattern-level (remove subpopulation)",
-    ],
+    ["Tuple-level (remove individual rows)", "Pattern-level (remove subpopulations)"],
 )
+max_removals = st.slider("Max iterations", 1, 100, 20)
 
-max_removals = st.slider("Max tuples/patterns to try", min_value=1, max_value=100, value=20)
+def in_range(v, c, tol):
+    return (c - tol) <= v <= (c + tol)
 
-
-def in_range(val, c, tol):
-    return (val >= c - tol) and (val <= c + tol)
-
-
-# ------------------------------------------------------------
-# tuple-level implementation (your original one)
-# ------------------------------------------------------------
-def run_tuple_repair(df_input: pd.DataFrame):
-    df_work = df_input.copy()
+# ---------------------------------------------------------------------
+# Tuple-level algorithm
+# ---------------------------------------------------------------------
+def run_tuple_repair(df_in):
+    df_work = df_in.copy()
     removed_rows = []
-
     current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
-    if in_range(current, desired_center, tolerance):
-        return df_work, removed_rows, current
-
-    for step in range(max_removals):
-        best_idx = None
-        best_ate = None
-        best_dist = None
-
-        for idx in df_work.index.tolist():
+    for _ in range(max_removals):
+        if in_range(current, desired_center, tolerance):
+            break
+        best_idx, best_ate, best_dist = None, None, None
+        for idx in df_work.index:
             tmp = df_work.drop(index=idx)
             ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
-            if np.isnan(ate_tmp):
-                continue
-            # if already in range, take it
-            if in_range(ate_tmp, desired_center, tolerance):
-                best_idx = idx
-                best_ate = ate_tmp
-                best_dist = 0.0
-                break
             dist = abs(ate_tmp - desired_center)
-            if (best_dist is None) or (dist < best_dist):
-                best_dist = dist
-                best_idx = idx
-                best_ate = ate_tmp
-
+            if best_dist is None or dist < best_dist:
+                best_idx, best_ate, best_dist = idx, ate_tmp, dist
         if best_idx is None:
             break
-
         removed_rows.append(df_work.loc[best_idx])
         df_work = df_work.drop(index=best_idx)
         current = best_ate
+    return df_work, pd.DataFrame(removed_rows), current
 
-        if in_range(current, desired_center, tolerance):
-            break
-
-    return df_work, removed_rows, current
-
-
-# ------------------------------------------------------------
-# pattern-level implementation (simple version)
-# ------------------------------------------------------------
-def run_pattern_repair(df_input: pd.DataFrame):
-    """
-    Very simple pattern deletion:
-    - consider all columns except treatment/outcome
-    - for each distinct value in that column, simulate removing all rows with that value
-    - choose the one that brings ATE closest to target
-    - repeat up to max_removals or until we're in range
-
-    This mimics "pattern-level" / subpopulation removal from the paper.
-    """
-    df_work = df_input.copy()
+# ---------------------------------------------------------------------
+# Pattern-level algorithm
+# ---------------------------------------------------------------------
+def run_pattern_repair(df_in):
+    df_work = df_in.copy()
     removed_patterns = []
     current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
     other_cols = [c for c in df_work.columns if c not in [treatment_col, outcome_col]]
-
-    if in_range(current, desired_center, tolerance):
-        return df_work, removed_patterns, current
-
     for _ in range(max_removals):
-        best_col = None
-        best_val = None
-        best_ate = None
-        best_dist = None
-
-        # search 1-attribute patterns
-        for col in other_cols:
-            # to keep it small, cap number of unique values per column
-            unique_vals = df_work[col].unique()
-            if len(unique_vals) > 30:  # just to avoid crazy loops
-                unique_vals = unique_vals[:30]
-
-            for v in unique_vals:
-                mask = df_work[col] == v
-                tmp = df_work[~mask]
-                if tmp.empty:
-                    continue
-                ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
-                if np.isnan(ate_tmp):
-                    continue
-                if in_range(ate_tmp, desired_center, tolerance):
-                    best_col = col
-                    best_val = v
-                    best_ate = ate_tmp
-                    best_dist = 0.0
-                    break
-                dist = abs(ate_tmp - desired_center)
-                if (best_dist is None) or (dist < best_dist):
-                    best_dist = dist
-                    best_col = col
-                    best_val = v
-                    best_ate = ate_tmp
-            if best_dist == 0.0:
-                break
-
-        if best_col is None:
-            break
-
-        # apply the best pattern deletion
-        removed_patterns.append((best_col, best_val, (df_work[best_col] == best_val).sum()))
-        df_work = df_work[df_work[best_col] != best_val]
-        current = best_ate
-
         if in_range(current, desired_center, tolerance):
             break
+        best_col = best_val = best_ate = None
+        best_dist = None
+        for col in other_cols:
+            for val in df_work[col].unique()[:30]:
+                tmp = df_work[df_work[col] != val]
+                ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
+                dist = abs(ate_tmp - desired_center)
+                if best_dist is None or dist < best_dist:
+                    best_col, best_val, best_ate, best_dist = col, val, ate_tmp, dist
+        if best_col is None:
+            break
+        removed_count = (df_work[best_col] == best_val).sum()
+        removed_patterns.append((best_col, best_val, removed_count))
+        df_work = df_work[df_work[best_col] != best_val]
+        current = best_ate
+    removed_df = pd.DataFrame(removed_patterns, columns=["Column", "Value", "Rows_removed"])
+    return df_work, removed_df, current
 
-    return df_work, removed_patterns, current
-
-
-run_repair = st.button("Run repair")
-
-if run_repair:
-    if algorithm.startswith("Tuple-level"):
-        df_new, removed, new_ate = run_tuple_repair(df)
-        st.success(f"New ATE after **tuple-level** repair: **{new_ate:.4f}**")
-        st.write(f"Total tuples removed: **{len(removed)}**")
-        if len(removed) > 0:
-            st.subheader("Removed tuples")
-            st.dataframe(pd.DataFrame(removed))
+# ---------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------
+if st.button("Run repair"):
+    if algorithm.startswith("Tuple"):
+        df_new, removed_df, new_ate = run_tuple_repair(df)
+        st.success(f"New ATE after tuple-level repair: **{new_ate:.4f}**")
+        st.write(f"Total tuples removed: **{len(removed_df)}**")
+        st.subheader("Removed tuples")
+        st.dataframe(removed_df.head())
     else:
-        df_new, removed_patterns, new_ate = run_pattern_repair(df)
-        st.success(f"New ATE after **pattern-level** repair: **{new_ate:.4f}**")
-        st.write(f"Total patterns removed: **{len(removed_patterns)}**")
-        if len(removed_patterns) > 0:
-            st.subheader("Removed subpopulations")
-            st.dataframe(
-                pd.DataFrame(removed_patterns, columns=["column", "value", "rows_removed"])
-            )
-
-    st.subheader("Repaired dataset head")
-    st.dataframe(df_new.head())
+        df_new, removed_df, new_ate = run_pattern_repair(df)
+        st.success(f"New ATE after pattern-level repair: **{new_ate:.4f}**")
+        st.write(f"Total patterns removed: **{len(removed_df)}**")
+        st.subheader("Head of removed subpopulations")
+        st.dataframe(removed_df.head())
 
     st.info(
-        "Note: tuple-level = your original O(n²) demo. "
-        "Pattern-level here uses only single-attribute patterns to stay simple; "
-        "the paper does smarter multi-predicate random walks."
+        "Note: tuple-level removes rows individually. "
+        "Pattern-level removes attribute=value groups (simplified)."
     )
