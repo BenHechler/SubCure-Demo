@@ -9,15 +9,13 @@ st.title("SubCure Demo")
 
 st.markdown(
     """
-A minimal demo for **“Stress-Testing Causal Claims via Cardinality Repairs”**.
+A demo for **“Stress-Testing Causal Claims via Cardinality Repairs”**
 
 **Flow**
 1. Choose dataset  
-2. Select treatment, outcome, confounders  
-3. Compute ATE  
-4. Set target ATE range  
-5. Choose repair algorithm (tuple-level or pattern-level)  
-6. Run the repair and inspect removed data
+2. Select treatment, outcome, confounders and compute ATE  
+3. Set target ATE range and repair algorithm (tuple-level or pattern-level)  
+4. Run the repair and inspect removed data
 """
 )
 
@@ -60,23 +58,34 @@ def load_ACS_dataset():
     })
 
 
-dataset_name = st.sidebar.selectbox("Choose dataset", ["Twins", "ACS", "Upload CSV"])
+# ---------------------------------------------------------------------
+# 1) Choose dataset
+# ---------------------------------------------------------------------
+st.subheader("Step 1 – Choose dataset")
+
+dataset_name = st.selectbox("Select a dataset", ["Twins", "ACS", "Credit", "Stack Overflow", "Upload CSV"])
+
 if dataset_name == "Twins":
     df = load_twins_dataset()
 elif dataset_name == "ACS":
     df = load_ACS_dataset()
 else:
-    uploaded = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
+    uploaded = st.file_uploader("Upload a CSV file", type=["csv"])
     if uploaded is None:
         st.stop()
     df = pd.read_csv(uploaded)
 
+# ---------------------------------------------------------------------
+# 2) Show dataset preview
+# ---------------------------------------------------------------------
 st.subheader("Dataset preview")
 st.dataframe(df.head())
 
 # ---------------------------------------------------------------------
-# Column selection
+# 3) Column selection
 # ---------------------------------------------------------------------
+st.subheader("Step 2 – Select columns for causal estimation")
+
 all_cols = list(df.columns)
 treatment_col = st.selectbox("Treatment (binary 0/1)", all_cols)
 outcome_col = st.selectbox("Outcome (numeric)", all_cols, index=min(1, len(all_cols) - 1))
@@ -101,8 +110,10 @@ if st.button("Compute ATE"):
     st.success(f"Current ATE = **{ate_val:.4f}**")
 
 # ---------------------------------------------------------------------
-# Target range and algorithm
+# 4) Target range and algorithm
 # ---------------------------------------------------------------------
+st.subheader("Step 3 – Define target range and repair algorithm")
+
 current_ate = compute_ate_linear(df, treatment_col, outcome_col, confounders)
 desired_center = st.number_input("Desired ATE center", value=float(np.round(current_ate, 3)))
 tolerance = st.number_input("Tolerance (±)", value=0.5, min_value=0.0, step=0.1)
@@ -171,12 +182,14 @@ def run_pattern_repair(df_in):
 # ---------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------
+st.subheader("Step 4 – Run repair")
+
 if st.button("Run repair"):
     if algorithm.startswith("Tuple"):
         df_new, removed_df, new_ate = run_tuple_repair(df)
         st.success(f"New ATE after tuple-level repair: **{new_ate:.4f}**")
         st.write(f"Total tuples removed: **{len(removed_df)}**")
-        st.subheader("Removed tuples")
+        st.subheader("Head of removed tuples")
         st.dataframe(removed_df.head())
     else:
         df_new, removed_df, new_ate = run_pattern_repair(df)
@@ -186,6 +199,6 @@ if st.button("Run repair"):
         st.dataframe(removed_df.head())
 
     st.info(
-        "Note: tuple-level removes rows individually. "
-        "Pattern-level removes attribute=value groups (simplified)."
+        "Tuple-level removes individual rows.\n"
+        "Pattern-level removes attribute=value groups (simplified version)."
     )
