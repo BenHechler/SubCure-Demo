@@ -3,19 +3,21 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-st.set_page_config(page_title="Causal Cardinality Repair Demo", layout="wide")
+st.set_page_config(page_title="SubCure Demo", layout="wide")
 
-st.title("Causal ATE Demo (mini SubCure-style)")
+st.title("SubCure Demo")  # - Causal ATE  - Cardinality Repair
 
 st.markdown(
     """
-This is a minimal demo inspired by **“Stress-Testing Causal Claims via Cardinality Repairs.”**  
-Flow:
-1. choose dataset  
-2. pick treatment / outcome / confounders  
-3. compute ATE  
-4. set desired ATE range  
-5. run a simple greedy tuple-removal to push ATE into the range
+This is a demo for the **“Stress-Testing Causal Claims via Cardinality Repairs”** paper.
+
+**Flow**:
+1. Choose dataset  
+2. Pick treatment / outcome / confounders  
+3. Compute ATE  
+4. Set desired ATE range  
+5. **Choose algorithm** (tuple-level vs pattern-level)  
+6. Run the chosen algorithm to push ATE into the desired range
 """
 )
 
@@ -23,16 +25,15 @@ Flow:
 # 1) DATASETS
 # ------------------------------------------------------------
 @st.cache_data
-def load_synthetic_wages():
+def load_twins_dataset():
     # synthetic dataset with binary disability and wages
     np.random.seed(42)
     n = 500
-    # treatment: 1 = no disability, 0 = disability
     treatment = np.random.binomial(1, 0.7, size=n)
     edu_years = np.random.randint(8, 20, size=n)
     age = np.random.randint(20, 65, size=n)
     base = 15000 + 1200 * edu_years + 200 * (age - 30)
-    treatment_effect = 6000  # people w/o disability earn more
+    treatment_effect = 6000
     noise = np.random.normal(0, 4000, size=n)
     wage = base + treatment * treatment_effect + noise
     df = pd.DataFrame(
@@ -47,15 +48,13 @@ def load_synthetic_wages():
 
 
 @st.cache_data
-def load_synthetic_health():
-    # Binary treatment: got_treatment; outcome: recovery_time
+def load_ACS_dataset():
     np.random.seed(123)
     n = 400
     got_treatment = np.random.binomial(1, 0.5, size=n)
     severity = np.random.randint(1, 5, size=n)
     age = np.random.randint(18, 80, size=n)
     base = 20 + 3 * severity + 0.1 * (age - 40)
-    # treatment decreases recovery time by ~2 days
     outcome = base - 2 * got_treatment + np.random.normal(0, 1.5, size=n)
     df = pd.DataFrame(
         {
@@ -70,13 +69,13 @@ def load_synthetic_health():
 
 dataset_name = st.sidebar.selectbox(
     "Choose a dataset",
-    ["Synthetic Wages", "Synthetic Health", "Upload CSV"],
+    ["Twins", "ACS", "Upload CSV"],
 )
 
-if dataset_name == "Synthetic Wages":
-    df = load_synthetic_wages()
-elif dataset_name == "Synthetic Health":
-    df = load_synthetic_health()
+if dataset_name == "Twins":
+    df = load_twins_dataset()
+elif dataset_name == "ACS":
+    df = load_ACS_dataset()
 else:
     uploaded = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
     if uploaded is not None:
@@ -109,7 +108,6 @@ def compute_ate_linear(data: pd.DataFrame, treat: str, outcome: str, confs: list
     cols_x = [treat] + confs
     X = data[cols_x].values
     y = data[outcome].values
-    # drop rows with NaNs
     mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
     X = X[mask]
     y = y[mask]
@@ -117,8 +115,7 @@ def compute_ate_linear(data: pd.DataFrame, treat: str, outcome: str, confs: list
         return np.nan
     model = LinearRegression()
     model.fit(X, y)
-    # treatment is always the first col
-    ate = model.coef_[0]
+    ate = model.coef_[0]  # treatment is first
     return ate
 
 
@@ -127,9 +124,9 @@ if st.button("Compute ATE on current data"):
     st.success(f"Current ATE (treatment coefficient) = **{ate_val:.4f}**")
 
 # ------------------------------------------------------------
-# 3) DESIRED ATE RANGE + GREEDY REPAIR
+# 3) DESIRED ATE RANGE
 # ------------------------------------------------------------
-st.subheader("Causal repair (very simple greedy version)")
+st.subheader("Causal repair")
 
 current_ate = compute_ate_linear(df, treatment_col, outcome_col, confounders)
 st.write(f"Current ATE: **{current_ate:.4f}**")
@@ -139,79 +136,166 @@ desired_center = st.number_input(
 )
 tolerance = st.number_input("Tolerance (±)", value=0.5, min_value=0.0, step=0.1)
 
-max_removals = st.slider("Max tuples to try to remove", min_value=1, max_value=100, value=20)
-
-st.markdown(
-    "Click to run a tiny greedy search: at each step we remove **one row** that moves ATE closest to the target range."
+# ------------------------------------------------------------
+# 4) CHOOSE ALGORITHM (from the article: tuple-level / pattern-level)
+# ------------------------------------------------------------
+algorithm = st.selectbox(
+    "Choose repair algorithm",
+    [
+        "Tuple-level (remove individual rows)",
+        "Pattern-level (remove subpopulation)",
+    ],
 )
+
+max_removals = st.slider("Max tuples/patterns to try", min_value=1, max_value=100, value=20)
+
+
+def in_range(val, c, tol):
+    return (val >= c - tol) and (val <= c + tol)
+
+
+# ------------------------------------------------------------
+# tuple-level implementation (your original one)
+# ------------------------------------------------------------
+def run_tuple_repair(df_input: pd.DataFrame):
+    df_work = df_input.copy()
+    removed_rows = []
+
+    current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
+    if in_range(current, desired_center, tolerance):
+        return df_work, removed_rows, current
+
+    for step in range(max_removals):
+        best_idx = None
+        best_ate = None
+        best_dist = None
+
+        for idx in df_work.index.tolist():
+            tmp = df_work.drop(index=idx)
+            ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
+            if np.isnan(ate_tmp):
+                continue
+            # if already in range, take it
+            if in_range(ate_tmp, desired_center, tolerance):
+                best_idx = idx
+                best_ate = ate_tmp
+                best_dist = 0.0
+                break
+            dist = abs(ate_tmp - desired_center)
+            if (best_dist is None) or (dist < best_dist):
+                best_dist = dist
+                best_idx = idx
+                best_ate = ate_tmp
+
+        if best_idx is None:
+            break
+
+        removed_rows.append(df_work.loc[best_idx])
+        df_work = df_work.drop(index=best_idx)
+        current = best_ate
+
+        if in_range(current, desired_center, tolerance):
+            break
+
+    return df_work, removed_rows, current
+
+
+# ------------------------------------------------------------
+# pattern-level implementation (simple version)
+# ------------------------------------------------------------
+def run_pattern_repair(df_input: pd.DataFrame):
+    """
+    Very simple pattern deletion:
+    - consider all columns except treatment/outcome
+    - for each distinct value in that column, simulate removing all rows with that value
+    - choose the one that brings ATE closest to target
+    - repeat up to max_removals or until we're in range
+
+    This mimics "pattern-level" / subpopulation removal from the paper.
+    """
+    df_work = df_input.copy()
+    removed_patterns = []
+    current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
+    other_cols = [c for c in df_work.columns if c not in [treatment_col, outcome_col]]
+
+    if in_range(current, desired_center, tolerance):
+        return df_work, removed_patterns, current
+
+    for _ in range(max_removals):
+        best_col = None
+        best_val = None
+        best_ate = None
+        best_dist = None
+
+        # search 1-attribute patterns
+        for col in other_cols:
+            # to keep it small, cap number of unique values per column
+            unique_vals = df_work[col].unique()
+            if len(unique_vals) > 30:  # just to avoid crazy loops
+                unique_vals = unique_vals[:30]
+
+            for v in unique_vals:
+                mask = df_work[col] == v
+                tmp = df_work[~mask]
+                if tmp.empty:
+                    continue
+                ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
+                if np.isnan(ate_tmp):
+                    continue
+                if in_range(ate_tmp, desired_center, tolerance):
+                    best_col = col
+                    best_val = v
+                    best_ate = ate_tmp
+                    best_dist = 0.0
+                    break
+                dist = abs(ate_tmp - desired_center)
+                if (best_dist is None) or (dist < best_dist):
+                    best_dist = dist
+                    best_col = col
+                    best_val = v
+                    best_ate = ate_tmp
+            if best_dist == 0.0:
+                break
+
+        if best_col is None:
+            break
+
+        # apply the best pattern deletion
+        removed_patterns.append((best_col, best_val, (df_work[best_col] == best_val).sum()))
+        df_work = df_work[df_work[best_col] != best_val]
+        current = best_ate
+
+        if in_range(current, desired_center, tolerance):
+            break
+
+    return df_work, removed_patterns, current
+
 
 run_repair = st.button("Run repair")
 
 if run_repair:
-    df_work = df.copy()
-    removed_rows = []
-
-    def in_range(val, c, tol):
-        return (val >= c - tol) and (val <= c + tol)
-
-    current_ate = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
-
-    # stop early if already fine
-    if in_range(current_ate, desired_center, tolerance):
-        st.info("ATE is already in the desired range — no removal needed.")
-    else:
-        for step in range(max_removals):
-            # for each remaining row, test removing it
-            best_idx = None
-            best_ate = None
-            best_dist = None
-
-            # to keep demo fast, cap per-iteration candidates
-            # (for real code, you'd do clustering / influence approximation as in the paper)
-            candidate_indices = df_work.index.tolist()
-
-            for idx in candidate_indices:
-                tmp = df_work.drop(index=idx)
-                ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
-                if np.isnan(ate_tmp):
-                    continue
-                # distance to target interval (0 if inside)
-                if in_range(ate_tmp, desired_center, tolerance):
-                    best_idx = idx
-                    best_ate = ate_tmp
-                    best_dist = 0.0
-                    break
-                # otherwise distance to center
-                dist = abs(ate_tmp - desired_center)
-                if (best_dist is None) or (dist < best_dist):
-                    best_dist = dist
-                    best_idx = idx
-                    best_ate = ate_tmp
-
-            # apply the best removal
-            if best_idx is not None:
-                removed_rows.append(df_work.loc[best_idx])
-                df_work = df_work.drop(index=best_idx)
-                current_ate = best_ate
-
-                if in_range(current_ate, desired_center, tolerance):
-                    break
-            else:
-                # no improvement
-                break
-
-        st.success(f"New ATE after repair: **{current_ate:.4f}**")
-        st.write(f"Total tuples removed: **{len(removed_rows)}**")
-
-        if len(removed_rows) > 0:
-            removed_df = pd.DataFrame(removed_rows)
+    if algorithm.startswith("Tuple-level"):
+        df_new, removed, new_ate = run_tuple_repair(df)
+        st.success(f"New ATE after **tuple-level** repair: **{new_ate:.4f}**")
+        st.write(f"Total tuples removed: **{len(removed)}**")
+        if len(removed) > 0:
             st.subheader("Removed tuples")
-            st.dataframe(removed_df)
+            st.dataframe(pd.DataFrame(removed))
+    else:
+        df_new, removed_patterns, new_ate = run_pattern_repair(df)
+        st.success(f"New ATE after **pattern-level** repair: **{new_ate:.4f}**")
+        st.write(f"Total patterns removed: **{len(removed_patterns)}**")
+        if len(removed_patterns) > 0:
+            st.subheader("Removed subpopulations")
+            st.dataframe(
+                pd.DataFrame(removed_patterns, columns=["column", "value", "rows_removed"])
+            )
 
-        st.subheader("Repaired dataset head")
-        st.dataframe(df_work.head())
+    st.subheader("Repaired dataset head")
+    st.dataframe(df_new.head())
 
-        st.info(
-            "Note: this is a *naive* O(n²) greedy demo for small data. "
-            "The paper uses smarter clustering + incremental ATE updates to scale."
-        )
+    st.info(
+        "Note: tuple-level = your original O(n²) demo. "
+        "Pattern-level here uses only single-attribute patterns to stay simple; "
+        "the paper does smarter multi-predicate random walks."
+    )
