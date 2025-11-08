@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
 import altair as alt
+from Datasets import load_ACS_dataset, load_twins_dataset
+from Algorithms import compute_ate_linear, run_tuple_repair, run_pattern_repair
 
 st.set_page_config(page_title="SubCure Demo", layout="wide")
-
 st.title("SubCure Demo")
 
 st.markdown(
@@ -19,45 +19,6 @@ A demo for **“Stress-Testing Causal Claims via Cardinality Repairs”**
 4. Run the repair and inspect removed data
 """
 )
-
-# ---------------------------------------------------------------------
-# Load example datasets
-# ---------------------------------------------------------------------
-@st.cache_data
-def load_twins_dataset():
-    np.random.seed(42)
-    n = 500
-    treatment = np.random.binomial(1, 0.7, size=n)
-    edu_years = np.random.randint(8, 20, size=n)
-    age = np.random.randint(20, 65, size=n)
-    base = 15000 + 1200 * edu_years + 200 * (age - 30)
-    treatment_effect = 6000
-    noise = np.random.normal(0, 4000, size=n)
-    wage = base + treatment * treatment_effect + noise
-    return pd.DataFrame({
-        "no_disability": treatment,
-        "wage": wage,
-        "edu_years": edu_years,
-        "age": age,
-    })
-
-
-@st.cache_data
-def load_ACS_dataset():
-    np.random.seed(123)
-    n = 400
-    got_treatment = np.random.binomial(1, 0.5, size=n)
-    severity = np.random.randint(1, 5, size=n)
-    age = np.random.randint(18, 80, size=n)
-    base = 20 + 3 * severity + 0.1 * (age - 40)
-    outcome = base - 2 * got_treatment + np.random.normal(0, 1.5, size=n)
-    return pd.DataFrame({
-        "got_treatment": got_treatment,
-        "recovery_days": outcome,
-        "severity": severity,
-        "age": age,
-    })
-
 
 # ---------------------------------------------------------------------
 # 1) Choose dataset
@@ -95,16 +56,6 @@ confounders = st.multiselect(
     [c for c in all_cols if c not in [treatment_col, outcome_col]],
     default=[],
 )
-
-def compute_ate_linear(data, treat, outcome, confs):
-    X = data[[treat] + confs].values
-    y = data[outcome].values
-    mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
-    X, y = X[mask], y[mask]
-    if len(y) == 0:
-        return np.nan
-    model = LinearRegression().fit(X, y)
-    return model.coef_[0]
 
 if st.button("Compute ATE"):
     ate_val = compute_ate_linear(df, treatment_col, outcome_col, confounders)
@@ -168,61 +119,6 @@ with right:
     ).properties(height=80)
     st.altair_chart(base + points, use_container_width=True)
 
-def in_range(v, c, tol):
-    return (c - tol) <= v <= (c + tol)
-
-# ---------------------------------------------------------------------
-# Tuple-level algorithm
-# ---------------------------------------------------------------------
-def run_tuple_repair(df_in):
-    df_work = df_in.copy()
-    removed_rows = []
-    current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
-    for _ in range(max_removals):
-        if in_range(current, desired_center, tolerance):
-            break
-        best_idx, best_ate, best_dist = None, None, None
-        for idx in df_work.index:
-            tmp = df_work.drop(index=idx)
-            ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
-            dist = abs(ate_tmp - desired_center)
-            if best_dist is None or dist < best_dist:
-                best_idx, best_ate, best_dist = idx, ate_tmp, dist
-        if best_idx is None:
-            break
-        removed_rows.append(df_work.loc[best_idx])
-        df_work = df_work.drop(index=best_idx)
-        current = best_ate
-    return df_work, pd.DataFrame(removed_rows), current
-
-# ---------------------------------------------------------------------
-# Pattern-level algorithm
-# ---------------------------------------------------------------------
-def run_pattern_repair(df_in):
-    df_work = df_in.copy()
-    removed_patterns = []
-    current = compute_ate_linear(df_work, treatment_col, outcome_col, confounders)
-    other_cols = [c for c in df_work.columns if c not in [treatment_col, outcome_col]]
-    for _ in range(max_removals):
-        if in_range(current, desired_center, tolerance):
-            break
-        best_col = best_val = best_ate = None
-        best_dist = None
-        for col in other_cols:
-            for val in df_work[col].unique()[:30]:
-                tmp = df_work[df_work[col] != val]
-                ate_tmp = compute_ate_linear(tmp, treatment_col, outcome_col, confounders)
-                dist = abs(ate_tmp - desired_center)
-                if best_dist is None or dist < best_dist:
-                    best_col, best_val, best_ate, best_dist = col, val, ate_tmp, dist
-        if best_col is None:
-            break
-        removed_count = (df_work[best_col] == best_val).sum()
-        removed_patterns.append((best_col, best_val, removed_count))
-        df_work = df_work[df_work[best_col] != best_val]
-        current = best_ate
-    removed_df = pd.DataFrame(removed_patterns, columns=["Column", "Value", "Rows_removed"])
-    return df_work, removed_df, current
 
 # ---------------------------------------------------------------------
 # Run
@@ -231,17 +127,17 @@ st.subheader("Step 4 – Run repair")
 
 if st.button("Run repair"):
     if algorithm.startswith("Tuple"):
-        df_new, removed_df, new_ate = run_tuple_repair(df)
+        df_new, removed_df, new_ate = run_tuple_repair(df, treatment_col, outcome_col, confounders, max_removals, desired_center, tolerance)
         st.success(f"New ATE after tuple-level repair: **{new_ate:.4f}**")
         st.write(f"Total tuples removed: **{len(removed_df)}**")
-        st.subheader("Head of removed tuples")
-        st.dataframe(removed_df.head())
+        st.subheader("Removed tuples")
+        st.dataframe(removed_df.head(10))
     else:
-        df_new, removed_df, new_ate = run_pattern_repair(df)
+        df_new, removed_df, new_ate = run_pattern_repair(df, treatment_col, outcome_col, confounders, max_removals, desired_center, tolerance)
         st.success(f"New ATE after pattern-level repair: **{new_ate:.4f}**")
         st.write(f"Total patterns removed: **{len(removed_df)}**")
-        st.subheader("Head of removed subpopulations")
-        st.dataframe(removed_df.head())
+        st.subheader("Removed subpopulations")
+        st.dataframe(removed_df.head(10))
 
     st.info(
         "Tuple-level removes individual rows.\n"
