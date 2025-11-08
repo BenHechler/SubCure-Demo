@@ -2,10 +2,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from Datasets import load_ACS_dataset, load_twins_dataset
-from Algorithms import compute_ate_linear, run_tuple_repair, run_pattern_repair
+from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset, DATASET_META
+from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
 
 st.set_page_config(page_title="SubCure Demo", layout="wide")
+
+defaults = {
+    "df": None,
+    "treatment_col": None,
+    "outcome_col": None,
+    "confounders": [],
+    "desired_center": None,
+    "tolerance": 0.5,
+    "algorithm": "Tuple-level (remove individual rows)",
+    "max_removals": 20,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 st.title("SubCure Demo")
 
 st.markdown(
@@ -31,6 +46,10 @@ if dataset_name == "Twins":
     df = load_twins_dataset()
 elif dataset_name == "ACS":
     df = load_ACS_dataset()
+elif dataset_name == "Stack Overflow":
+    df = load_SO_dataset()
+elif dataset_name == "Credit":
+    df = load_german_dataset()
 else:
     uploaded = st.file_uploader("Upload a CSV file", type=["csv"])
     if uploaded is None:
@@ -42,6 +61,33 @@ else:
 # ---------------------------------------------------------------------
 st.subheader("Dataset preview")
 st.dataframe(df.head())
+# dataset_name is whatever the user picked: "Twins", "ACS", "German", "SO"
+meta_key = dataset_name  # make sure names match the keys above
+
+st.subheader("Dataset summary")
+if meta_key in DATASET_META:
+    meta = DATASET_META[meta_key]
+    summary_df = pd.DataFrame(
+        {
+            "Dataset": [meta_key],
+            "#Tuples": [meta["#tuples"]],
+            "#Atts": [meta["#atts"]],
+            "Treatment": [meta["treatment"]],
+            "Outcome": [meta["outcome"]],
+            "Confounding Variables": [meta["confounders"]],
+            "Org ATE": [meta["org_ate"]],
+            "Tar ATE": [meta["tar_ate"]],
+        }
+    )
+
+    st.dataframe(
+        summary_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+else:
+    st.info("No paper metadata for this dataset.")
+
 
 # ---------------------------------------------------------------------
 # 3) Column selection
@@ -52,21 +98,28 @@ all_cols = list(df.columns)
 treatment_col = st.selectbox("Treatment (binary 0/1)", all_cols)
 outcome_col = st.selectbox("Outcome (numeric)", all_cols, index=min(1, len(all_cols) - 1))
 confounders = st.multiselect(
-    "Confounders (optional)",
+    "Confounders (if exists)",
     [c for c in all_cols if c not in [treatment_col, outcome_col]],
     default=[],
 )
 
+
+if "ate_val" not in st.session_state:
+    st.session_state.ate_val = None
+
 if st.button("Compute ATE"):
-    ate_val = compute_ate_linear(df, treatment_col, outcome_col, confounders)
-    st.success(f"Current ATE = **{ate_val:.4f}**")
+    st.session_state.ate_val = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
+
+if st.session_state.ate_val is not None:
+    st.success(f"Current ATE = **{st.session_state.ate_val:.4f}**")
+
 
 # ---------------------------------------------------------------------
 # 4) Target range, visualization, algorithm
 # ---------------------------------------------------------------------
 st.subheader("Step 3 – Define target range and repair algorithm")
 
-current_ate = compute_ate_linear(df, treatment_col, outcome_col, confounders)
+current_ate = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 
 # two columns: controls on left, visualization on right
 left, right = st.columns([1, 1])
@@ -104,21 +157,6 @@ with right:
     else:
         st.write("Treatment has many values, skipping boxplot.")
 
-    st.markdown("**Current vs target ATE**")
-    # >>> VISUALIZATION 2: current ATE vs target band <<<
-    ate_df = pd.DataFrame({
-        "label": ["Current ATE", "Target min", "Target max"],
-        "value": [current_ate, desired_center - tolerance, desired_center + tolerance],
-    })
-    base = alt.Chart(ate_df).mark_rule(color="lightgray").encode(x="value:Q")
-    points = alt.Chart(ate_df).mark_point(size=80).encode(
-        x="value:Q",
-        y=alt.value(0),
-        color=alt.Color("label:N", legend=alt.Legend(orient="bottom")),
-        tooltip=["label", "value"]
-    ).properties(height=80)
-    st.altair_chart(base + points, use_container_width=True)
-
 
 # ---------------------------------------------------------------------
 # Run
@@ -127,13 +165,29 @@ st.subheader("Step 4 – Run repair")
 
 if st.button("Run repair"):
     if algorithm.startswith("Tuple"):
-        df_new, removed_df, new_ate = run_tuple_repair(df, treatment_col, outcome_col, confounders, max_removals, desired_center, tolerance)
+        df_new, removed_df, new_ate = subcure_tuple(
+            df,
+            treatment_col,
+            outcome_col,
+            confounders,
+            ate_target=desired_center,
+            eps=tolerance,
+            max_iters=st.session_state.max_removals,
+        )
         st.success(f"New ATE after tuple-level repair: **{new_ate:.4f}**")
         st.write(f"Total tuples removed: **{len(removed_df)}**")
         st.subheader("Removed tuples")
         st.dataframe(removed_df.head(10))
     else:
-        df_new, removed_df, new_ate = run_pattern_repair(df, treatment_col, outcome_col, confounders, max_removals, desired_center, tolerance)
+        df_new, removed_df, new_ate = subcure_pattern(
+            df,
+            treatment_col,
+            outcome_col,
+            confounders,
+            ate_target=desired_center,
+            eps=tolerance,
+            max_walks=st.session_state.max_removals,
+        )
         st.success(f"New ATE after pattern-level repair: **{new_ate:.4f}**")
         st.write(f"Total patterns removed: **{len(removed_df)}**")
         st.subheader("Removed subpopulations")
