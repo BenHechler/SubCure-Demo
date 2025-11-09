@@ -246,42 +246,40 @@ with col2:
         st.subheader("📊 Analysis of Removed Data (Influential Tuples)")
 
         if not removed_df.empty:
+            st.markdown("#### Removed Tuples")
+            st.dataframe(
+                removed_df.head(10),
+                use_container_width=True,
+                height=200
+            )
+
             retained_df = df_new.copy()
-            try:
-                # Outcome comparison
-                removed_rate = removed_df[outcome_col].mean()
-                retained_rate = retained_df[outcome_col].mean()
-                diff_rate = removed_rate - retained_rate
 
-                st.metric(
-                    label=f"Mean Outcome (Removed vs Retained)",
-                    value=f"{removed_rate:.3f}",
-                    delta=f"{diff_rate:+.3f}",
-                    delta_color="inverse" if diff_rate > 0 else "normal"
-                )
-            except Exception:
-                st.warning("Outcome column not numeric; skipping mean comparison.")
-
-            # Birth weight–like continuous variable detection
+            # ================= Numeric feature histogram =================
             numeric_cols = removed_df.select_dtypes(include=[np.number]).columns.tolist()
             if len(numeric_cols) > 0:
                 feature = numeric_cols[0]
-                st.markdown(f"**Distribution of key numeric feature:** `{feature}`")
+                st.markdown(f"**Distribution of numeric feature:** `{feature}`")
 
                 merged_plot_df = pd.concat([
                     pd.DataFrame({'Category': 'Removed', 'Value': removed_df[feature]}),
                     pd.DataFrame({'Category': 'Retained', 'Value': retained_df[feature]})
                 ])
 
-                chart_hist = alt.Chart(merged_plot_df).mark_bar(opacity=0.7).encode(
-                    x=alt.X('Value:Q', bin=alt.Bin(maxbins=25), title=feature),
-                    y=alt.Y('count()', stack=None, title='Count'),
-                    color=alt.Color('Category:N', scale=alt.Scale(range=['#FF8C00', '#1f77b4'])),
-                    tooltip=['Category', 'count()']
-                ).properties(height=200)
+                chart_hist = (
+                    alt.Chart(merged_plot_df)
+                    .mark_bar(opacity=0.7)
+                    .encode(
+                        x=alt.X('Value:Q', bin=alt.Bin(maxbins=25), title=feature),
+                        y=alt.Y('count()', stack=None, title='Count'),
+                        color=alt.Color('Category:N', scale=alt.Scale(range=['#FF8C00', '#1f77b4'])),
+                        tooltip=['Category', 'count()'],
+                    )
+                    .properties(height=200)
+                )
                 st.altair_chart(chart_hist, use_container_width=True)
 
-            # Categorical variable comparison (if any)
+            # ================= Categorical feature comparison =================
             cat_cols = removed_df.select_dtypes(exclude=[np.number]).columns.tolist()
             if len(cat_cols) > 0:
                 feature_cat = cat_cols[0]
@@ -297,20 +295,25 @@ with col2:
 
                 cat_df = pd.concat([cat_removed, cat_retained])
 
-                chart_cat = alt.Chart(cat_df).mark_bar().encode(
-                    x=alt.X('Count:Q', title='Record Count'),
-                    y=alt.Y('Category:N', title=feature_cat),
-                    color=alt.Color('Set:N', scale=alt.Scale(domain=['Removed', 'Retained'],
-                                                             range=['#FF8C00', '#1f77b4'])),
-                    tooltip=['Set', 'Category', 'Count']
-                ).properties(height=250)
+                chart_cat = (
+                    alt.Chart(cat_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X('Count:Q', title='Record Count'),
+                        y=alt.Y('Category:N', title=feature_cat),
+                        color=alt.Color(
+                            'Set:N',
+                            scale=alt.Scale(
+                                domain=['Removed', 'Retained'],
+                                range=['#FF8C00', '#1f77b4']
+                            ),
+                        ),
+                        tooltip=['Set', 'Category', 'Count'],
+                    )
+                    .properties(height=250)
+                )
                 st.altair_chart(chart_cat, use_container_width=True)
 
-            st.info(
-                "Removed tuples often correspond to influential, low-frequency or low-risk groups "
-                "that artificially strengthened the original causal estimate. Visualizing them helps "
-                "understand where model fragility originates."
-            )
         else:
             st.warning("No removed tuples available for visualization.")
-        # ====================================================================
+
