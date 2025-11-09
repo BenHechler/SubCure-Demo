@@ -4,7 +4,7 @@ import numpy as np
 import altair as alt
 from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset, DATASET_META
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
-
+import time
 st.set_page_config(page_title="SubCure Demo", layout="wide")
 
 # ---------------------- SESSION STATE DEFAULTS ----------------------
@@ -21,6 +21,9 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ---------------------- SIDEBAR CONFIG ----------------------
+if "new_ate" not in st.session_state:
+    st.session_state.new_ate = None
+
 st.sidebar.title("⚙️ Controls")
 
 # Dataset selection
@@ -46,24 +49,21 @@ else:
 
 st.session_state.df = df
 
-# Column selection
 all_cols = list(df.columns)
 treatment_col = st.sidebar.selectbox("Treatment (binary 0/1)", all_cols)
-outcome_col = st.sidebar.selectbox("Outcome (numeric)", all_cols)
+outcome_col = st.sidebar.selectbox("Outcome (numeric)", [c for c in all_cols if c not in [treatment_col]])
 confounders = st.sidebar.multiselect(
-    "Confounders (optional)",
+    "Confounders",
     [c for c in all_cols if c not in [treatment_col, outcome_col]],
-    default=[]
+    default=[c for c in all_cols if c not in [treatment_col, outcome_col]]
 )
 
-# Compute ATE button + dynamic display
 if "ate_val" not in st.session_state:
     st.session_state.ate_val = None
 
 if st.sidebar.button("Compute ATE"):
     st.session_state.ate_val = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 
-# show result below button, before desired ATE input
 if st.session_state.ate_val is not None:
     st.sidebar.markdown(
         f"**Current ATE:** `{st.session_state.ate_val:.4f}`"
@@ -72,7 +72,6 @@ else:
     st.sidebar.info("Click **Compute ATE** to calculate it.")
 
 
-# Target ATE range
 current_ate = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 desired_center = st.sidebar.number_input(
     "Desired ATE center",
@@ -94,10 +93,20 @@ algorithm = st.sidebar.selectbox(
 )
 
 
-run_repair = st.sidebar.button("Run repair")
+if "run_repair" not in st.session_state:
+    st.session_state.run_repair = False
+
+if st.sidebar.button("Run repair"):
+    st.session_state.run_repair = True
+
+if st.session_state.new_ate is not None:
+    st.sidebar.markdown(
+        f"**New ATE after repair:** `{st.session_state.new_ate:.4f}`"
+    )
+
 
 # ---------------------- MAIN PANEL ----------------------
-st.title("🧠 SubCure Demo – Stress Testing Causal Claims")
+st.title("SubCure Demo – Stress Testing Causal Claims")
 
 col1, col2 = st.columns([1.4, 1])
 
@@ -106,7 +115,7 @@ with col1:
     st.markdown("### 📊 Dataset preview")
     st.dataframe(df.head(), use_container_width=True, height=180)
 
-    st.markdown("### 📘 Dataset summary (from paper Table 1)")
+    st.markdown("### 📘 Dataset summary")
     meta_key = dataset_name
     if meta_key in DATASET_META:
         meta = DATASET_META[meta_key]
@@ -126,14 +135,75 @@ with col1:
     else:
         st.info("No metadata available for this dataset.")
 
-    # st.markdown("### 🧮 ATE computation")
-    # if st.session_state.ate_val is not None:
-    #     st.success(f"Current ATE = **{st.session_state.ate_val:.4f}**")
-    # else:
-    #     st.info("Click **Compute ATE** in the sidebar to calculate the current ATE.")
 
+    st.markdown("### 🎨 Visualizations")
+
+    # 1) Outcome distribution by treatment
+    st.markdown("**Outcome distribution by treatment**")
+
+    # Only plot if both selected columns exist and are numeric/categorical
+    if treatment_col in df.columns and outcome_col in df.columns:
+        chart_data = df[[treatment_col, outcome_col]].copy()
+        chart_data = chart_data.rename(
+            columns={treatment_col: "Treatment", outcome_col: "Outcome"}
+        )
+
+        # Try to ensure correct types
+        try:
+            chart_data["Treatment"] = chart_data["Treatment"].astype(str)
+        except Exception:
+            pass
+
+        if chart_data["Treatment"].nunique() <= 20:
+            hist = (
+                alt.Chart(chart_data)
+                .mark_bar(opacity=0.6)
+                .encode(
+                    alt.X("Outcome:Q", bin=alt.Bin(maxbins=30), title="Outcome"),
+                    alt.Y("count()", stack=None, title="Count"),
+                    color=alt.Color("Treatment:N", title="Treatment"),
+                    tooltip=["Treatment", "count()"],
+                )
+                .properties(height=200)
+            )
+            st.altair_chart(hist, use_container_width=True)
+        else:
+            st.info("Too many treatment levels to visualize effectively.")
+    else:
+        st.warning("Please select valid Treatment and Outcome columns.")
+
+    # 3) Confounder balance plot (optional)
+    if len(confounders) > 0:
+        st.markdown("**Confounder balance**")
+        melt_list = []
+        for c in confounders:
+            grp = df.groupby(treatment_col)[c].mean().reset_index()
+            grp.columns = ["Treatment", "MeanValue"]
+            grp["Confounder"] = c
+            melt_list.append(grp)
+        bal_df = pd.concat(melt_list)
+        conf_chart = (
+            alt.Chart(bal_df)
+            .mark_circle(size=90)
+            .encode(
+                x="MeanValue:Q",
+                y=alt.Y("Confounder:N", title=None),
+                color="Treatment:N",
+                tooltip=["Confounder", "Treatment", "MeanValue"],
+            )
+            .properties(height=30 * len(confounders))
+        )
+        st.altair_chart(conf_chart, use_container_width=True)
+
+
+# ===== RIGHT SIDE: Visualizations =====
+with col2:
     # If repair run
-    if run_repair:
+    if st.session_state.run_repair:
+        st.markdown("### 🧾 Repair summary")
+
+        start_time = time.time()
+
         if algorithm.startswith("Tuple"):
             df_new, removed_df, new_ate = subcure_tuple(
                 df,
@@ -142,12 +212,8 @@ with col1:
                 confounders,
                 ate_target=desired_center,
                 eps=tolerance,
-                max_iters=1000,
             )
-            st.success(f"New ATE after tuple-level repair: **{new_ate:.4f}**")
-            st.write(f"Total tuples removed: **{len(removed_df)}**")
-            st.markdown("#### Removed tuples")
-            st.dataframe(removed_df.head(10), use_container_width=True, height=180)
+            algo_name = "Tuple-level repair"
         else:
             df_new, removed_df, new_ate = subcure_pattern(
                 df,
@@ -156,18 +222,26 @@ with col1:
                 confounders,
                 ate_target=desired_center,
                 eps=tolerance,
-                max_walks=1000,
             )
-            st.success(f"New ATE after pattern-level repair: **{new_ate:.4f}**")
-            st.write(f"Total patterns removed: **{len(removed_df)}**")
-            st.markdown("#### Removed subpopulations")
-            st.dataframe(removed_df.head(10), use_container_width=True, height=180)
+            algo_name = "Pattern-level repair"
 
-        st.caption(
-            "Tuple-level removes individual rows, while Pattern-level removes attribute=value groups."
-        )
+        st.session_state.new_ate = new_ate
 
-    # ===================== 🔍 ADDED INSIGHT SECTION =====================
+        exec_time = time.time() - start_time
+        n_removed = len(removed_df)
+        pct_removed = (n_removed / len(df)) * 100 if len(df) > 0 else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric(f"{algo_name} runtime", f"{exec_time:.2f}s")
+        with c2:
+            st.metric("tuples removed", f"{n_removed} ({pct_removed:.2f}%)")
+        with c3:
+            st.metric("old ATE", f"{current_ate:.3f}")
+        with c4:
+            st.metric("new ATE", f"{new_ate:.3f}")
+
+        # ===================== 🔍 ADDED INSIGHT SECTION =====================
         st.markdown("---")
         st.subheader("📊 Analysis of Removed Data (Influential Tuples)")
 
@@ -240,91 +314,3 @@ with col1:
         else:
             st.warning("No removed tuples available for visualization.")
         # ====================================================================
-
-# ===== RIGHT SIDE: Visualizations =====
-with col2:
-    st.markdown("### 🎨 Visualizations")
-
-    # 1) Outcome distribution by treatment
-    st.markdown("**Outcome distribution by treatment**")
-
-    # Only plot if both selected columns exist and are numeric/categorical
-    if treatment_col in df.columns and outcome_col in df.columns:
-        chart_data = df[[treatment_col, outcome_col]].copy()
-        chart_data = chart_data.rename(
-            columns={treatment_col: "Treatment", outcome_col: "Outcome"}
-        )
-
-        # Try to ensure correct types
-        try:
-            chart_data["Treatment"] = chart_data["Treatment"].astype(str)
-        except Exception:
-            pass
-
-        if chart_data["Treatment"].nunique() <= 20:
-            hist = (
-                alt.Chart(chart_data)
-                .mark_bar(opacity=0.6)
-                .encode(
-                    alt.X("Outcome:Q", bin=alt.Bin(maxbins=30), title="Outcome"),
-                    alt.Y("count()", stack=None, title="Count"),
-                    color=alt.Color("Treatment:N", title="Treatment"),
-                    tooltip=["Treatment", "count()"],
-                )
-                .properties(height=200)
-            )
-            st.altair_chart(hist, use_container_width=True)
-        else:
-            st.info("Too many treatment levels to visualize effectively.")
-    else:
-        st.warning("Please select valid Treatment and Outcome columns.")
-
-
-    # 2) ATE vs desired visualization
-    st.markdown("**ATE vs desired range**")
-    left_bound = min(current_ate, desired_center - tolerance) - abs(tolerance) * 0.6
-    right_bound = max(current_ate, desired_center + tolerance) + abs(tolerance) * 0.6
-    band_df = pd.DataFrame({
-        "start": [desired_center - tolerance],
-        "end": [desired_center + tolerance],
-    })
-    band = alt.Chart(band_df).mark_rect(opacity=0.3, color="green").encode(
-        x=alt.X("start:Q", scale=alt.Scale(domain=[left_bound, right_bound])),
-        x2="end:Q"
-    )
-    current_line = alt.Chart(pd.DataFrame({"current": [current_ate]})).mark_rule(
-        color="red", strokeWidth=3
-    ).encode(x="current:Q")
-    center_line = alt.Chart(pd.DataFrame({"center": [desired_center]})).mark_rule(
-        color="green", strokeDash=[4, 4]
-    ).encode(x="center:Q")
-    labels = alt.Chart(
-        pd.DataFrame(
-            {"label": ["Current ATE", "Target center"], "value": [current_ate, desired_center]}
-        )
-    ).mark_text(align="left", dx=4, dy=-6, fontSize=11).encode(x="value:Q", text="label:N")
-    ate_chart = (band + current_line + center_line + labels).properties(height=120)
-    st.altair_chart(ate_chart, use_container_width=True)
-
-    # 3) Confounder balance plot (optional)
-    if len(confounders) > 0:
-        st.markdown("**Confounder balance**")
-        melt_list = []
-        for c in confounders:
-            grp = df.groupby(treatment_col)[c].mean().reset_index()
-            grp.columns = ["Treatment", "MeanValue"]
-            grp["Confounder"] = c
-            melt_list.append(grp)
-        bal_df = pd.concat(melt_list)
-        conf_chart = (
-            alt.Chart(bal_df)
-            .mark_circle(size=90)
-            .encode(
-                x="MeanValue:Q",
-                y=alt.Y("Confounder:N", title=None),
-                color="Treatment:N",
-                tooltip=["Confounder", "Treatment", "MeanValue"],
-            )
-            .properties(height=30 * len(confounders))
-        )
-        st.altair_chart(conf_chart, use_container_width=True)
