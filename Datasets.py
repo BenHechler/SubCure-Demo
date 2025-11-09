@@ -10,7 +10,13 @@ def load_twins_dataset():
 
 @st.cache_data
 def load_ACS_dataset():
-    return load_dataset("acs")
+    df = load_dataset("acs")
+    del df['Unnamed: 0']
+    T = "With a disability"
+    O = "Wages or salary income past 12 months"
+    cols = [T, O] + [c for c in df.columns if c not in [T, O]]
+    df = df[cols]
+    return df
 
 
 @st.cache_data
@@ -29,7 +35,6 @@ def load_dataset(name):
     name += ".csv"
     full_path = data_dir / name
     df = pd.read_csv(full_path).head(1000)
-    del df['Unnamed: 0']
     return df
 
 
