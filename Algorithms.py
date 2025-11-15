@@ -1,226 +1,301 @@
+# Algorithms.py
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
-from sklearn.cluster import KMeans
-import random
-from collections import defaultdict
+
+from Algo.ATE_update import ATEUpdateLinear
+from Algo.clustered_top_k import ClusteredATEBaselines
+from Algo.batch_sampled_top_k import BatchSampledATEBaselines
 
 
-def estimate_ate_linear(df, treatment, outcome, confounders):
-    X = df[[treatment] + confounders].to_numpy()
-    y = df[outcome].to_numpy()
-    mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
-    X, y = X[mask], y[mask]
-    if len(y) == 0:
-        return np.nan
-    model = LinearRegression().fit(X, y)
-    return model.coef_[0]  # treatment is first
+# -------------------------------
+# 1. ATE estimation helper
+# -------------------------------
 
-
-def in_target(ate, target, eps):
-    return (target - eps) <= ate <= (target + eps)
-
-
-def subcure_tuple(
-    df,
-    treatment,
-    outcome,
-    confounders,
-    ate_target,
-    eps,
-    max_iters=200,
-    reps_per_cluster=2,
-    random_state=0,
-):
-    # ----- 1) initial ATE
-    cur_ate = estimate_ate_linear(df, treatment, outcome, confounders)
-    if in_target(cur_ate, ate_target, eps):
-        return df, pd.DataFrame([]), cur_ate
-
-    # ----- 2) build clustering space: T, O, Z...
-    cols_for_clustering = [treatment, outcome] + confounders
-    X = df[cols_for_clustering].to_numpy()
-
-    n = len(df)
-    k = max(5, min(int(np.sqrt(n)), n // 10))  # as in paper 5 ≤ k ≤ n/10 approx. :contentReference[oaicite:6]{index=6}
-    km = KMeans(n_clusters=k, n_init=10, random_state=random_state)
-    cluster_labels = km.fit_predict(X)
-
-    # group indices by cluster
-    clusters = {c: np.where(cluster_labels == c)[0].tolist() for c in range(k)}
-
-    # ----- 3) pick representatives per cluster (closest to centroid + 1 more) :contentReference[oaicite:7]{index=7}
-    reps_by_cluster = {}
-    for c in range(k):
-        idxs = clusters[c]
-        if len(idxs) <= reps_per_cluster:
-            reps_by_cluster[c] = idxs
-        else:
-            # compute distances to centroid
-            centroid = km.cluster_centers_[c]
-            dists = [(i, np.linalg.norm(X[i] - centroid)) for i in idxs]
-            dists.sort(key=lambda x: x[1])
-            # first rep: closest
-            chosen = [dists[0][0]]
-            # second rep: pick about 75th percentile distance
-            if reps_per_cluster > 1:
-                second = dists[min(len(dists)-1, int(0.75*len(dists)) )][0]
-                chosen.append(second)
-            reps_by_cluster[c] = chosen
-
-    # we'll track removed rows
-    removed_rows = []
-
-    # ----- 4) iterative, cluster-aware removal
-    active_idx = set(range(n))
-
-    for it in range(max_iters):
-        # recompute current ATE
-        cur_df = df.iloc[list(active_idx)]
-        cur_ate = estimate_ate_linear(cur_df, treatment, outcome, confounders)
-        if in_target(cur_ate, ate_target, eps):
-            break
-
-        # For each cluster, sample up to 5 points that are still active, score them. :contentReference[oaicite:8]{index=8}
-        best_candidate = None
-        best_new_ate = None
-        best_delta = None
-
-        for c in range(k):
-            # active points in this cluster
-            cluster_active = [i for i in clusters[c] if i in active_idx]
-            if not cluster_active:
-                continue
-            m_k = min(5, len(cluster_active))  # as per paper
-            sampled = random.sample(cluster_active, m_k)
-
-            for idx in sampled:
-                # remove idx and get new ATE
-                tmp_active = active_idx - {idx}
-                tmp_df = df.iloc[list(tmp_active)]
-                new_ate = estimate_ate_linear(tmp_df, treatment, outcome, confounders)
-                # how good is it? measure distance to target center
-                delta = abs(new_ate - ate_target)
-                if best_delta is None or delta < best_delta:
-                    best_delta = delta
-                    best_candidate = idx
-                    best_new_ate = new_ate
-
-        if best_candidate is None:
-            # nothing more to do
-            break
-
-        # apply best removal
-        removed_rows.append(df.iloc[best_candidate])
-        active_idx.remove(best_candidate)
-
-    final_df = df.iloc[list(active_idx)]
-    final_ate = estimate_ate_linear(final_df, treatment, outcome, confounders)
-    removed_df = pd.DataFrame(removed_rows)
-    return final_df, removed_df, final_ate
-
-
-def pattern_tuples(df, pattern):
-    """Return mask of rows matching a dict pattern {col: value}."""
-    mask = pd.Series(True, index=df.index)
-    for col, val in pattern.items():
-        mask = mask & (df[col] == val)
-    return mask
-
-
-def subcure_pattern(
-    df,
-    treatment,
-    outcome,
-    confounders,
-    ate_target,
-    eps,
-    max_walks=20,
-    max_pattern_size=4,
-    sample_frac=1.0,
-):
+def estimate_ate_linear(df: pd.DataFrame,
+                        treatment_col: str,
+                        outcome_col: str,
+                        confounders: list) -> float:
     """
-    Simplified version of Algorithm 1 in the paper. :contentReference[oaicite:11]{index=11}
-    """
-    cur_ate = estimate_ate_linear(df, treatment, outcome, confounders)
-    if in_target(cur_ate, ate_target, eps):
-        # nothing to remove
-        return df, pd.DataFrame([]), cur_ate
+    Estimate the ATE using the exact linear model implementation
+    from ATE_update.ATEUpdateLinear.
 
-    # maybe sample to speed up, as they do for ACS :contentReference[oaicite:12]{index=12}
-    if sample_frac < 1.0:
-        df_work = df.sample(frac=sample_frac, random_state=0)
+    Parameters
+    ----------
+    df : DataFrame
+        Full dataset.
+    treatment_col : str
+        Name of the treatment column (binary 0/1).
+    outcome_col : str
+        Name of the outcome column (numeric).
+    confounders : list of str
+        List of confounder columns.
+
+    Returns
+    -------
+    float
+        Original ATE as computed by the SubCuRe linear model.
+    """
+    if not confounders:
+        # Use an empty feature matrix but keep the index aligned
+        X = pd.DataFrame(index=df.index)
     else:
-        df_work = df
+        X = df[confounders]
 
-    # 1) get most specific groups = all (col=val) except outcome
-    candidate_cols = [c for c in df_work.columns if c not in [outcome]]
-    most_specific = []
-    for col in candidate_cols:
-        for val in df_work[col].unique():
-            most_specific.append({col: val})
+    T = df[treatment_col]
+    Y = df[outcome_col]
 
-    # cache of evaluated patterns → ate
-    ate_cache = {}
+    ate_model = ATEUpdateLinear(X, T, Y)
+    ate = ate_model.get_original_ate()
+    return float(ate)
 
-    def eval_after_removal(pattern):
-        key = tuple(sorted(pattern.items()))
-        if key in ate_cache:
-            return ate_cache[key]
-        mask = pattern_tuples(df, pattern)
-        new_df = df[~mask]
-        new_ate = estimate_ate_linear(new_df, treatment, outcome, confounders)
-        ate_cache[key] = new_ate
-        return new_ate
 
-    # weighting for predicates (dynamic weighting mechanism) :contentReference[oaicite:13]{index=13}
-    predicate_weights = defaultdict(lambda: 1.0)
+# -------------------------------
+# 2. SubCuRe-Tuple (exact)
+# -------------------------------
 
-    # try up to k random walks
-    for _ in range(max_walks):
-        if not most_specific:
+def _run_subcure_tuple_core(X: pd.DataFrame,
+                            T: pd.Series,
+                            Y: pd.Series,
+                            ate_target: float,
+                            eps: float,
+                            approx: bool = False,
+                            influence_recalc_interval: int = 10):
+    """
+    Internal helper that chooses between ClusteredATEBaselines and
+    BatchSampledATEBaselines exactly as in main_subcure_tuple.py.
+    It returns the result dict from the underlying implementation.
+    """
+    model_type = "linear"
+
+    n = len(X)
+
+    if n > 100_000:
+        # Large-scale path: BatchSampledATEBaselines + top_k_plus
+        # Mirrors the logic in main_subcure_tuple.py
+        sample_ratio = 0.1
+        batch_size = 400
+        k_neighbors = 100
+
+        # We don't rely on a pre-existing sample file in the demo;
+        # we allow the sampler to create/use an in-memory sample.
+        sampled_baselines = BatchSampledATEBaselines(
+            X,
+            T,
+            Y,
+            model_type=model_type,
+            sample_ratio=sample_ratio,
+            sample_file_path="subcure_sample.csv",
+            use_cached_sample=False,
+            batch_size=batch_size,
+        )
+
+        result = sampled_baselines.batch_sampled_top_k_plus(
+            target_ate=ate_target,
+            epsilon=eps,
+            k_neighbors=k_neighbors,
+            approx=approx,
+            influence_recalc_interval=influence_recalc_interval,
+            verbose=False,
+        )
+
+    else:
+        # Small/medium path: clustered SubCuRe-Tuple
+        sampled_baselines = ClusteredATEBaselines(
+            X,
+            T,
+            Y,
+            model_type=model_type,
+        )
+
+        result = sampled_baselines.top_k_plus(
+            target_ate=ate_target,
+            epsilon=eps,
+            approx=approx,
+            # using clustering-based variant with default clustering args
+            use_clustering=True,
+            n_clusters=None,
+            samples_per_cluster=2,
+            influence_recalc_interval=influence_recalc_interval,
+            verbose=False,
+        )
+
+    return result
+
+
+def subcure_tuple(df: pd.DataFrame,
+                  treatment_col: str,
+                  outcome_col: str,
+                  confounders: list,
+                  ate_target: float,
+                  eps: float):
+    """
+    Tuple-level SubCuRe implementation for the demo.
+
+    This is a thin wrapper around the *exact* SubCuRe-Tuple algorithm
+    from the original repository (ClusteredATEBaselines / BatchSampledATEBaselines).
+
+    Parameters
+    ----------
+    df : DataFrame
+        Dataset.
+    treatment_col : str
+        Treatment column name (binary 0/1).
+    outcome_col : str
+        Outcome column name (numeric).
+    confounders : list of str
+        Confounder column names.
+    ate_target : float
+        Desired ATE center.
+    eps : float
+        Tolerance around the desired ATE.
+
+    Returns
+    -------
+    df_new : DataFrame
+        Dataset after removing tuples suggested by SubCuRe-Tuple.
+    removed_df : DataFrame
+        The removed tuples.
+    new_ate : float
+        The ATE after removal according to the SubCuRe algorithm.
+    """
+    if not confounders:
+        X = pd.DataFrame(index=df.index)
+    else:
+        X = df[confounders]
+
+    T = df[treatment_col]
+    Y = df[outcome_col]
+
+    result = _run_subcure_tuple_core(
+        X, T, Y,
+        ate_target=ate_target,
+        eps=eps,
+        approx=False,                # keep exact version
+        influence_recalc_interval=10
+    )
+
+    removed_indices = result.get("removed_indices", [])
+    new_ate = float(result.get("final_ate", np.nan))
+
+    # Build df_new and removed_df from indices
+    mask = np.ones(len(df), dtype=bool)
+    mask[removed_indices] = False
+
+    df_new = df.loc[mask].reset_index(drop=True)
+    removed_df = df.loc[removed_indices].reset_index(drop=True)
+
+    return df_new, removed_df, new_ate
+
+
+# -------------------------------
+# 3. SubCuRe-Pattern (demo-friendly)
+# -------------------------------
+
+def subcure_pattern(df: pd.DataFrame,
+                    treatment_col: str,
+                    outcome_col: str,
+                    confounders: list,
+                    ate_target: float,
+                    eps: float,
+                    max_steps: int = 50,
+                    min_group_size: int = 10):
+    """
+    Pattern-level causal repair (demo-friendly version).
+
+    NOTE:
+    -----
+    The original `subcure_pattern.py` in the repo is written as a
+    random-walk script that *prints* statistics and does not return
+    the removed tuples. For the interactive Streamlit demo we need
+    a clean function that returns:
+        (df_new, removed_df, new_ate)
+
+    This function follows the same *spirit*:
+        - Remove attribute = value *subpopulations* (patterns),
+        - Recompute ATE after each removal,
+        - Stop when ATE is within [ate_target - eps, ate_target + eps]
+          or when no improvement is possible.
+
+    It greedily chooses, at each step, the pattern that moves the ATE
+    closest toward the target.
+    """
+    work_df = df.copy()
+    removed_indices = []
+
+    # For pattern-search we only use confounders as candidate attributes
+    pattern_columns = list(confounders)
+
+    if not pattern_columns:
+        # If no confounders, fall back to tuple algorithm
+        df_new, removed_df, new_ate = subcure_tuple(
+            df, treatment_col, outcome_col, confounders, ate_target, eps
+        )
+        return df_new, removed_df, new_ate
+
+    def _compute_ate(local_df: pd.DataFrame) -> float:
+        if not confounders:
+            X_local = pd.DataFrame(index=local_df.index)
+        else:
+            X_local = local_df[confounders]
+        T_local = local_df[treatment_col]
+        Y_local = local_df[outcome_col]
+        model = ATEUpdateLinear(X_local, T_local, Y_local)
+        return float(model.get_original_ate())
+
+    current_ate = _compute_ate(work_df)
+
+    # Early exit if already in range
+    if ate_target - eps <= current_ate <= ate_target + eps:
+        return work_df.reset_index(drop=True), df.iloc[[]].copy(), current_ate
+
+    for step in range(max_steps):
+        best_pattern = None
+        best_new_ate = None
+        best_indices = None
+        current_diff = abs(current_ate - ate_target)
+
+        # Search over simple patterns: single attribute=value
+        for col in pattern_columns:
+            # Skip columns with too many unique values (for speed)
+            if work_df[col].nunique() > 50:
+                continue
+
+            for val, sub in work_df.groupby(col):
+                if len(sub) < min_group_size:
+                    continue
+
+                candidate_indices = sub.index
+                remaining_df = work_df.drop(index=candidate_indices)
+
+                # Avoid removing everything
+                if remaining_df.empty:
+                    continue
+
+                candidate_ate = _compute_ate(remaining_df)
+                candidate_diff = abs(candidate_ate - ate_target)
+
+                # Must actually move toward the target
+                if candidate_diff < current_diff:
+                    if (best_new_ate is None) or (candidate_diff < abs(best_new_ate - ate_target)):
+                        best_pattern = (col, val)
+                        best_new_ate = candidate_ate
+                        best_indices = list(candidate_indices)
+
+        # If no improving pattern found, stop
+        if best_pattern is None:
             break
-        pattern = random.choice(most_specific)
-        ate_after = eval_after_removal(pattern)
-        if in_target(ate_after, ate_target, eps):
-            # found a pattern
-            removed_mask = pattern_tuples(df, pattern)
-            removed_df = df[removed_mask]
-            remaining_df = df[~removed_mask]
-            return remaining_df, removed_df, ate_after
 
-        # random walk: keep removing predicates until empty
-        current_pattern = pattern.copy()
-        while current_pattern:
-            # pick a predicate to drop, weighted by past success
-            preds = list(current_pattern.items())
-            weights = [predicate_weights[(c, v)] for (c, v) in preds]
-            total_w = sum(weights)
-            probs = [w / total_w for w in weights]
-            # choose predicate index
-            chosen_idx = np.random.choice(len(preds), p=probs)
-            # drop it
-            drop_col, drop_val = preds[chosen_idx]
-            new_pattern = {c: v for (c, v) in current_pattern.items() if not (c == drop_col and v == drop_val)}
+        # Apply the best pattern removal
+        work_df = work_df.drop(index=best_indices)
+        removed_indices.extend(best_indices)
+        current_ate = best_new_ate
 
-            ate_after = eval_after_removal(new_pattern)
-            # update weight: if got closer, increase
-            cur_ate = estimate_ate_linear(df, treatment, outcome, confounders)
-            if abs(ate_after - ate_target) < abs(cur_ate - ate_target):
-                predicate_weights[(drop_col, drop_val)] *= 1.2  # reward
-            else:
-                predicate_weights[(drop_col, drop_val)] *= 0.9  # punish
+        # Check stopping rule
+        if ate_target - eps <= current_ate <= ate_target + eps:
+            break
 
-            if in_target(ate_after, ate_target, eps):
-                removed_mask = pattern_tuples(df, new_pattern)
-                removed_df = df[removed_mask]
-                remaining_df = df[~removed_mask]
-                return remaining_df, removed_df, ate_after
+    # Build outputs
+    removed_df = df.loc[removed_indices].reset_index(drop=True)
+    df_new = work_df.reset_index(drop=True)
 
-            # move on
-            current_pattern = new_pattern
-            if len(current_pattern) > max_pattern_size:
-                break  # early terminate like they suggest :contentReference[oaicite:14]{index=14}
-
-    # no solution found
-    return df, pd.DataFrame([]), estimate_ate_linear(df, treatment, outcome, confounders)
+    return df_new, removed_df, current_ate

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset, DATASET_META
+from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
 import time
 st.set_page_config(page_title="SubCure Demo", layout="wide")
@@ -115,26 +115,15 @@ with col1:
     st.markdown("### 📊 Dataset preview")
     st.dataframe(df.head(), use_container_width=True, height=180)
 
-    meta_key = dataset_name
-    if meta_key in DATASET_META:
-        meta = DATASET_META[meta_key]
-        num_records = len(df)
-        num_atts = len(df.columns)
-        st.markdown(
-            f"**Records:** {num_records:,} | "
-            f"**Attributes:** {num_atts}"
-        )
-    else:
-        num_records = len(df)
-        num_atts = len(df.columns)
-        st.markdown(
-            f"**Records:** {num_records:,} | "
-            f"**Attributes:** {num_atts}"
-        )
+    num_records = len(df)
+    num_atts = len(df.columns)
+    st.markdown(
+        f"**Records:** {num_records:,} | "
+        f"**Attributes:** {num_atts}"
+    )
 
     st.markdown("### 🎨 Visualizations")
 
-    # 1) Outcome distribution by treatment
     st.markdown("**Outcome distribution by treatment**")
 
     # Only plot if both selected columns exist and are numeric/categorical
