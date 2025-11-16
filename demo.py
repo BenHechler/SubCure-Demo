@@ -4,6 +4,8 @@ import numpy as np
 import altair as alt
 from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
+import removed_analysis as ra
+
 import time
 st.set_page_config(page_title="SubCure Demo", layout="wide")
 
@@ -12,7 +14,7 @@ defaults = {
     "df": None,
     "ate_val": None,
     "desired_center": None,
-    "tolerance": 0.5,
+    "tolerance": 10,
     "algorithm": "Tuple-level (remove individual rows)",
     "max_removals": 20,
 }
@@ -61,12 +63,12 @@ confounders = st.sidebar.multiselect(
 if "ate_val" not in st.session_state:
     st.session_state.ate_val = None
 
-if st.sidebar.button("Compute ATE"):
+if st.sidebar.button("Compute causal effect"):
     st.session_state.ate_val = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 
 if st.session_state.ate_val is not None:
     st.sidebar.markdown(
-        f"**Current ATE:** `{st.session_state.ate_val:.4f}`"
+        f"**Current causal effect:** `{st.session_state.ate_val:.4f}`"
     )
 else:
     st.sidebar.info("Click **Compute ATE** to calculate it.")
@@ -74,34 +76,35 @@ else:
 
 current_ate = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 desired_center = st.sidebar.number_input(
-    "Desired ATE center",
+    "Desired causal effect",
     value=float(np.round(current_ate, 3))
 )
 
-tolerance = st.sidebar.slider(
-    "Tolerance (±)",
-    min_value=0.0,
-    max_value=5.0,
+tolerance_percanteges = st.sidebar.slider(
+    "Tolerance in % (±)",
+    min_value=0,
+    max_value=50,
     value=st.session_state.tolerance,
-    step=0.1,
+    step=1,
     help="Allowed deviation around the target ATE"
 )
 
+tolerance = desired_center * tolerance_percanteges / 100
+
 algorithm = st.sidebar.selectbox(
-    "Repair algorithm",
+    "Intervention algorithm",
     ["Tuple-level (remove individual rows)", "Pattern-level (remove subpopulations)"]
 )
-
 
 if "run_repair" not in st.session_state:
     st.session_state.run_repair = False
 
-if st.sidebar.button("Run repair"):
+if st.sidebar.button("Run algorithm"):
     st.session_state.run_repair = True
 
 if st.session_state.new_ate is not None:
     st.sidebar.markdown(
-        f"**New ATE after repair:** `{st.session_state.new_ate:.4f}`"
+        f"**New causal effect after repair:** `{st.session_state.new_ate:.4f}`"
     )
 
 
@@ -185,12 +188,12 @@ with col1:
 with col2:
     # If repair run
     if st.session_state.run_repair:
-        st.markdown("### 🧾 Repair summary")
+        st.markdown("### 🧾 Results summary")
 
         start_time = time.time()
 
         if algorithm.startswith("Tuple"):
-            df_new, removed_df, new_ate = subcure_tuple(
+            df_new, removed_df_raw, new_ate = subcure_tuple(
                 df,
                 treatment_col,
                 outcome_col,
@@ -200,7 +203,7 @@ with col2:
             )
             algo_name = "Tuple-level repair"
         else:
-            df_new, removed_df, new_ate = subcure_pattern(
+            df_new, removed_df_raw, new_ate = subcure_pattern(
                 df,
                 treatment_col,
                 outcome_col,
@@ -213,233 +216,93 @@ with col2:
         st.session_state.new_ate = new_ate
 
         exec_time = time.time() - start_time
-        n_removed = len(removed_df)
+        n_removed = len(removed_df_raw)
         pct_removed = (n_removed / len(df)) * 100 if len(df) > 0 else 0
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric(f"{algo_name} runtime", f"{exec_time:.2f}s")
+            st.metric(f"runtime", f"{exec_time:.1f}s")
         with c2:
-            st.metric("tuples removed", f"{n_removed} ({pct_removed:.2f}%)")
+            st.metric("tuples removed", f"{n_removed} ({pct_removed:.1f}%)")
         with c3:
-            st.metric("old ATE", f"{current_ate:.3f}")
+            st.metric("old causal effect", f"{current_ate:.1f}")
         with c4:
-            st.metric("new ATE", f"{new_ate:.3f}")
+            st.metric("new causal effect", f"{new_ate:.1f}")
 
+        st.markdown("### 📉 Original vs Removed Averages (per Feature)")
+        # Extract numeric columns that exist in both datasets
+        removed_df = df.loc[df.index.difference(df_new.index)].copy()
 
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = [c for c in numeric_cols if c in removed_df.columns]
 
-
-
-
-        # =================== Attribute Pattern Discovery ===================
-        st.markdown("#### 🧬 Common Attribute Patterns Among Removed Tuples")
-
-        categorical_cols = removed_df.select_dtypes(exclude=[np.number]).columns.tolist()
-        numeric_cols = removed_df.select_dtypes(include=[np.number]).columns.tolist()
-        results_cat, results_num = [], []
-
-        # --- Categorical features: frequency lift ---
-        for col in categorical_cols:
-            top_removed = removed_df[col].value_counts(normalize=True).head(1)
-            if top_removed.empty:
-                continue
-            top_val = top_removed.index[0]
-            removed_pct = top_removed.iloc[0] * 100
-            total_pct = df[col].value_counts(normalize=True).reindex([top_val]).fillna(0).iloc[0] * 100
-            lift = removed_pct / (total_pct + 1e-6)
-            results_cat.append({
-                "Attribute": col,
-                "Top Value": str(top_val),
-                "Removed %": removed_pct,
-                "Overall %": total_pct,
-                "Overrepresentation (×)": lift
-            })
-
-        # --- Numeric features: mean shift in SD units ---
+        comparison_rows = []
         for col in numeric_cols:
-            rmv_mean, all_mean = removed_df[col].mean(), df[col].mean()
-            std = np.std(df[col]) if np.std(df[col]) > 0 else 1e-6
-            diff_std = (rmv_mean - all_mean) / std
-            results_num.append({
-                "Attribute": col,
-                "Top Value": "Higher" if diff_std > 0 else "Lower",
-                "Removed %": np.nan,
-                "Overall %": np.nan,
-                "Overrepresentation (×)": abs(diff_std)
+            orig = df[col].mean()
+            rem = removed_df[col].mean()
+            # Avoid division by zero
+            if orig == 0:
+                pct_diff = np.nan
+            else:
+                pct_diff = ((rem - orig) / abs(orig)) * 100
+
+            comparison_rows.append({
+                "Feature": col,
+                "Original_Mean": orig,
+                "Removed_Mean": rem,
+                "Diff_Percent": pct_diff
             })
 
-        df_cat = pd.DataFrame(results_cat)
-        df_num = pd.DataFrame(results_num)
+        mean_df = pd.DataFrame(comparison_rows)
+        mean_df["AbsPctDiff"] = mean_df["Diff_Percent"].abs()
+        mean_df["Direction"] = mean_df["Diff_Percent"].apply(lambda x: "Positive" if x >= 0 else "Negative")
 
-        if df_cat.empty and df_num.empty:
-            st.info("No distinctive attributes found among removed tuples.")
+        # st.markdown("### 🐞 Debug: Removed Tuples DataFrame")
+        # st.dataframe(mean_df.head(50), use_container_width=True)
+
+        plot_df = mean_df.copy()
+
+        # Color scale red for negative, green for positive
+        color_scale = alt.Scale(
+            domain=["Positive", "Negative"],
+            range=["#4daf4a", "#e41a1c"]  # green, red
+        )
+
+        chart = (
+            alt.Chart(plot_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Feature:N",
+                        sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
+                        title="Feature"),
+                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[0, 100])),
+                color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
+                tooltip=[
+                    alt.Tooltip("Feature:N"),
+                    alt.Tooltip("Original_Mean:Q", format=".3f", title="Original Mean"),
+                    alt.Tooltip("Removed_Mean:Q", format=".3f", title="Removed Mean"),
+                    alt.Tooltip("Diff_Percent:Q", format=".1f", title="% Change"),
+                ]
+            )
+            .properties(
+                width=40 * len(plot_df),
+                height=450,
+            )
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+        if removed_df is None or removed_df.empty:
+            st.info("No removed tuples to analyze yet.")
         else:
-            st.markdown("#### 📊 Top Distinctive Attributes")
-            if not df_cat.empty:
-                st.markdown("**Categorical features (frequency lift):**")
-                df_cat = df_cat.sort_values("Overrepresentation (×)", ascending=False)
-                st.dataframe(df_cat.head(10), use_container_width=True, height=250)
-            if not df_num.empty:
-                st.markdown("**Numeric features (standard deviation shift):**")
-                df_num = df_num.sort_values("Overrepresentation (×)", ascending=False)
-                st.dataframe(df_num.head(10), use_container_width=True, height=250)
+            results, diff = ra.compute_removed_analysis(removed_df, df)
 
-            # --- Add color classification ---
-            def assign_color(score):
-                if score > 2:
-                    return "Strong"
-                elif score > 1.3:
-                    return "Moderate"
-                else:
-                    return "Weak"
+        st.markdown("## 🤖 AI Insights on Removed Subpopulation")
 
+        with st.spinner("Generating interpretability insights..."):
+            try:
+                ai_text = ra.call_gpt_for_removed_analysis(results, diff)
+            except Exception as e:
+                ai_text = f"⚠️ GPT call failed: {e}"
 
-            for df_temp in [df_cat, df_num]:
-                if not df_temp.empty:
-                    df_temp["color_code"] = df_temp["Overrepresentation (×)"].apply(assign_color)
-
-            color_scale = alt.Scale(
-                domain=["Strong", "Moderate", "Weak"],
-                range=["#e41a1c", "#ffbf00", "#4daf4a"]
-            )
-
-            # --- Side-by-side bar charts ---
-            charts = []
-            if not df_cat.empty:
-                chart_cat = (
-                    alt.Chart(df_cat.head(15))
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("Overrepresentation (×):Q", title="Lift (Removed vs Overall)"),
-                        y=alt.Y("Attribute:N", sort="-x"),
-                        color=alt.Color("color_code:N", scale=color_scale, legend=None),
-                        tooltip=["Attribute", "Top Value",
-                                 alt.Tooltip("Removed %:Q", format=".1f"),
-                                 alt.Tooltip("Overall %:Q", format=".1f"),
-                                 alt.Tooltip("Overrepresentation (×):Q", format=".2f")]
-                    )
-                    .properties(title="Categorical Attributes", height=25 * min(len(df_cat), 15))
-                )
-                charts.append(chart_cat)
-
-            if not df_num.empty:
-                chart_num = (
-                    alt.Chart(df_num.head(15))
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("Overrepresentation (×):Q", title="Mean Shift (|Δ| SD)"),
-                        y=alt.Y("Attribute:N", sort="-x"),
-                        color=alt.Color("color_code:N", scale=color_scale,
-                                        legend=alt.Legend(title="Influence Strength")),
-                        tooltip=["Attribute", "Top Value",
-                                 alt.Tooltip("Overrepresentation (×):Q", format=".2f")]
-                    )
-                    .properties(title="Numeric Attributes", height=25 * min(len(df_num), 15))
-                )
-                charts.append(chart_num)
-
-            if charts:
-                st.altair_chart(alt.hconcat(*charts), use_container_width=True)
-
-            # --- 🧠 Color-coded automatic summary generation ---
-            combined_df = pd.concat([df_cat, df_num], ignore_index=True)
-            top3 = combined_df.sort_values("Overrepresentation (×)", ascending=False).head(3)
-            insights = []
-            for _, row in top3.iterrows():
-                attr, val, score = row["Attribute"], row["Top Value"], row["Overrepresentation (×)"]
-                color_emoji = "🟩"
-                if score > 2:
-                    color_emoji = "🟥"
-                elif score > 1.3:
-                    color_emoji = "🟨"
-
-                if not np.isnan(row.get("Removed %", np.nan)):
-                    pct = f"{row['Removed %']:.1f}%"
-                    insights.append(f"{color_emoji} {attr} = **{val}** ({pct} of removed, ×{score:.1f})")
-                else:
-                    insights.append(f"{color_emoji} {attr} tends to be **{val}** (|Δ| ≈ {score:.1f} SD)")
-
-            summary_text = ", ".join(insights)
-            st.markdown(f"#### 🗣️ Summary\nRemoved tuples are predominantly characterized by: {summary_text}.")
-            st.caption(
-                "🟥 Strongly overrepresented | 🟨 Moderately distinctive | 🟩 Minor difference\n"
-                "Left: categorical attributes showing frequency lift; Right: numeric features showing mean shift.\n"
-                "Together they highlight which traits most define the tuples whose removal influenced the causal estimate."
-            )
-        #
-        # # ===================== 🔍 ADDED INSIGHT SECTION =====================
-        # st.markdown("---")
-        # st.subheader("📊 Analysis of Removed Data (Influential Tuples)")
-        #
-        # if not removed_df.empty:
-        #     st.markdown("#### Removed Tuples")
-        #     st.dataframe(
-        #         removed_df.head(10),
-        #         use_container_width=True,
-        #         height=200
-        #     )
-        #
-        #     retained_df = df_new.copy()
-        #
-        #     # ================= Numeric feature histogram =================
-        #     numeric_cols = removed_df.select_dtypes(include=[np.number]).columns.tolist()
-        #     if len(numeric_cols) > 0:
-        #         feature = numeric_cols[0]
-        #         st.markdown(f"**Distribution of numeric feature:** `{feature}`")
-        #
-        #         merged_plot_df = pd.concat([
-        #             pd.DataFrame({'Category': 'Removed', 'Value': removed_df[feature]}),
-        #             pd.DataFrame({'Category': 'Retained', 'Value': retained_df[feature]})
-        #         ])
-        #
-        #         chart_hist = (
-        #             alt.Chart(merged_plot_df)
-        #             .mark_bar(opacity=0.7)
-        #             .encode(
-        #                 x=alt.X('Value:Q', bin=alt.Bin(maxbins=25), title=feature),
-        #                 y=alt.Y('count()', stack=None, title='Count'),
-        #                 color=alt.Color('Category:N', scale=alt.Scale(range=['#FF8C00', '#1f77b4'])),
-        #                 tooltip=['Category', 'count()'],
-        #             )
-        #             .properties(height=200)
-        #         )
-        #         st.altair_chart(chart_hist, use_container_width=True)
-        #
-        #     # ================= Categorical feature comparison =================
-        #     cat_cols = removed_df.select_dtypes(exclude=[np.number]).columns.tolist()
-        #     if len(cat_cols) > 0:
-        #         feature_cat = cat_cols[0]
-        #         st.markdown(f"**Distribution of categorical feature:** `{feature_cat}`")
-        #
-        #         cat_removed = removed_df[feature_cat].value_counts().reset_index()
-        #         cat_removed.columns = ['Category', 'Count']
-        #         cat_removed['Set'] = 'Removed'
-        #
-        #         cat_retained = retained_df[feature_cat].value_counts().reset_index()
-        #         cat_retained.columns = ['Category', 'Count']
-        #         cat_retained['Set'] = 'Retained'
-        #
-        #         cat_df = pd.concat([cat_removed, cat_retained])
-        #
-        #         chart_cat = (
-        #             alt.Chart(cat_df)
-        #             .mark_bar()
-        #             .encode(
-        #                 x=alt.X('Count:Q', title='Record Count'),
-        #                 y=alt.Y('Category:N', title=feature_cat),
-        #                 color=alt.Color(
-        #                     'Set:N',
-        #                     scale=alt.Scale(
-        #                         domain=['Removed', 'Retained'],
-        #                         range=['#FF8C00', '#1f77b4']
-        #                     ),
-        #                 ),
-        #                 tooltip=['Set', 'Category', 'Count'],
-        #             )
-        #             .properties(height=250)
-        #         )
-        #         st.altair_chart(chart_cat, use_container_width=True)
-        #
-        # else:
-        #     st.warning("No removed tuples available for visualization.")
-
+        st.write(ai_text)
