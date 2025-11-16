@@ -31,7 +31,7 @@ st.sidebar.title("⚙️ Controls")
 # Dataset selection
 dataset_name = st.sidebar.selectbox(
     "Dataset",
-    ["ACS", "Credit", "Stack Overflow", "Upload CSV"]  # Twins dataset has no csv
+    ["ACS", "Credit", "Stack Overflow", "Twins", "Upload CSV"]
 )
 
 # Load dataset
