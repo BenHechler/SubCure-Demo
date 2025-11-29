@@ -1,2 +1,2 @@
-run this command - .\venv\Scripts\python.exe -m streamlit run .\main.py
+run this command - .\venv\Scripts\python.exe -m streamlit run .\demo.py
 opens the browser in http://localhost:8501/

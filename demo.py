@@ -26,6 +26,16 @@ for k, v in defaults.items():
 if "new_ate" not in st.session_state:
     st.session_state.new_ate = None
 
+
+# st.markdown("""
+#     <style>
+#         html, body, [class*="css"] {
+#             font-size: 12px !important;
+#         }
+#     </style>
+# """, unsafe_allow_html=True)
+
+
 st.sidebar.title("⚙️ Controls")
 
 # Dataset selection
@@ -109,13 +119,20 @@ if st.session_state.new_ate is not None:
 
 
 # ---------------------- MAIN PANEL ----------------------
-st.title("SubCure Demo – Stress Testing Causal Claims")
+col_logo, col_title = st.columns([0.2, 4])
+
+with col_logo:
+    st.image("subcure_logo_2.png", width=120)
+
+with col_title:
+    st.title("SubCure Demo – Stress Testing Causal Claims")
+
 
 col1, col2 = st.columns([1.4, 1])
 
 # ===== LEFT SIDE: Dataset and Results =====
 with col1:
-    st.markdown("### 📊 Dataset preview")
+    st.markdown("### 📊 Dataset Preview")
     st.dataframe(df.head(), use_container_width=True, height=180)
 
     num_records = len(df)
@@ -136,9 +153,8 @@ with col1:
             columns={treatment_col: "Treatment", outcome_col: "Outcome"}
         )
 
-        # Try to ensure correct types
         try:
-            chart_data["Treatment"] = chart_data["Treatment"].astype(str)
+            chart_data["Treatment"] = chart_data["Treatment"].astype(str).apply(lambda x: f"{treatment_col}: {x}")
         except Exception:
             pass
 
@@ -160,7 +176,6 @@ with col1:
     else:
         st.warning("Please select valid Treatment and Outcome columns.")
 
-    # 3) Confounder balance plot (optional)
     if len(confounders) > 0:
         st.markdown("**Confounder balance**")
         melt_list = []
@@ -170,6 +185,7 @@ with col1:
             grp["Confounder"] = c
             melt_list.append(grp)
         bal_df = pd.concat(melt_list)
+        bal_df["Treatment"] = bal_df["Treatment"].astype(str).apply(lambda x: f"{treatment_col}: {x}")
         conf_chart = (
             alt.Chart(bal_df)
             .mark_circle(size=90)
@@ -188,7 +204,7 @@ with col1:
 with col2:
     # If repair run
     if st.session_state.run_repair:
-        st.markdown("### 🧾 Results summary")
+        st.markdown("### 🧾 Results Summary")
 
         start_time = time.time()
 
@@ -229,7 +245,7 @@ with col2:
         with c4:
             st.metric("new causal effect", f"{new_ate:.1f}")
 
-        st.markdown("### 📉 Original vs Removed Averages (per Feature)")
+        st.markdown("### 📉 Averages Percentage Change (Caused By Removals)")
         # Extract numeric columns that exist in both datasets
         removed_df = df.loc[df.index.difference(df_new.index)].copy()
 
@@ -267,6 +283,11 @@ with col2:
             domain=["Positive", "Negative"],
             range=["#4daf4a", "#e41a1c"]  # green, red
         )
+        max_val = max(plot_df["AbsPctDiff"])
+        try:
+            axis_upper_bound = round(1.5 * max_val)
+        except:
+            axis_upper_bound = 100
 
         chart = (
             alt.Chart(plot_df)
@@ -275,7 +296,7 @@ with col2:
                 x=alt.X("Feature:N",
                         sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
                         title="Feature"),
-                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[0, 100])),
+                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[0, axis_upper_bound])),
                 color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
                 tooltip=[
                     alt.Tooltip("Feature:N"),
@@ -297,12 +318,13 @@ with col2:
         else:
             results, diff = ra.compute_removed_analysis(removed_df, df)
 
-        st.markdown("## 🤖 AI Insights on Removed Subpopulation")
+        st.markdown("## 🤖 Insights on Removed Subpopulation")
 
         with st.spinner("Generating interpretability insights..."):
             try:
                 ai_text = ra.call_gpt_for_removed_analysis(results, diff)
             except Exception as e:
                 ai_text = f"⚠️ GPT call failed: {e}"
+            # ai_text = f"⚠️ GPT call blocked - saving tokens for now"
 
         st.write(ai_text)

@@ -74,7 +74,9 @@ ATE full dataset: {summary["ate_full"]}
 ATE removed subset: {summary["ate_removed"]}
 ATE difference (removed - full): {summary["ate_diff"]}
 
-Please produce a concise analysis describing:
+provide a 2 lines summary of the most significant findings
+
+then produce a concise analysis describing:
 
 1. What characterizes the removed subpopulation?
 2. Which features shift the most?
@@ -83,6 +85,7 @@ Please produce a concise analysis describing:
 5. If the removed subgroup is meaningful (e.g., vulnerable, extreme, influential patterns).
 
 Give a structured bullet-point summary.
+
 """
 
     response = client.chat.completions.create(
