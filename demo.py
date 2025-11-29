@@ -26,19 +26,8 @@ for k, v in defaults.items():
 if "new_ate" not in st.session_state:
     st.session_state.new_ate = None
 
-
-# st.markdown("""
-#     <style>
-#         html, body, [class*="css"] {
-#             font-size: 12px !important;
-#         }
-#     </style>
-# """, unsafe_allow_html=True)
-
-
 st.sidebar.title("⚙️ Controls")
 
-# Dataset selection
 dataset_name = st.sidebar.selectbox(
     "Dataset",
     ["ACS", "Credit", "Stack Overflow", "Twins", "Upload CSV"]
@@ -78,7 +67,7 @@ if st.sidebar.button("Compute causal effect"):
 
 if st.session_state.ate_val is not None:
     st.sidebar.markdown(
-        f"**Current causal effect:** `{st.session_state.ate_val:.4f}`"
+        f"**Current causal effect:** `{st.session_state.ate_val:.1f}`"
     )
 else:
     st.sidebar.info("Click **Compute ATE** to calculate it.")
@@ -114,7 +103,7 @@ if st.sidebar.button("Run algorithm"):
 
 if st.session_state.new_ate is not None:
     st.sidebar.markdown(
-        f"**New causal effect after repair:** `{st.session_state.new_ate:.4f}`"
+        f"**New causal effect after repair:** `{st.session_state.new_ate:.1f}`"
     )
 
 
@@ -239,7 +228,8 @@ with col2:
         with c1:
             st.metric(f"runtime", f"{exec_time:.1f}s")
         with c2:
-            st.metric("tuples removed", f"{n_removed} ({pct_removed:.1f}%)")
+            st.metric("tuples removed", f"{pct_removed:.1f}%")
+            # st.metric("tuples removed", f"{n_removed} ({pct_removed:.1f}%)")
         with c3:
             st.metric("old causal effect", f"{current_ate:.1f}")
         with c4:
@@ -256,7 +246,6 @@ with col2:
         for col in numeric_cols:
             orig = df[col].mean()
             rem = removed_df[col].mean()
-            # Avoid division by zero
             if orig == 0:
                 pct_diff = np.nan
             else:
@@ -273,9 +262,6 @@ with col2:
         mean_df["AbsPctDiff"] = mean_df["Diff_Percent"].abs()
         mean_df["Direction"] = mean_df["Diff_Percent"].apply(lambda x: "Positive" if x >= 0 else "Negative")
 
-        # st.markdown("### 🐞 Debug: Removed Tuples DataFrame")
-        # st.dataframe(mean_df.head(50), use_container_width=True)
-
         plot_df = mean_df.copy()
 
         # Color scale red for negative, green for positive
@@ -284,9 +270,9 @@ with col2:
             range=["#4daf4a", "#e41a1c"]  # green, red
         )
         max_val = max(plot_df["AbsPctDiff"])
-        try:
+        if max_val > 0:
             axis_upper_bound = round(1.5 * max_val)
-        except:
+        else:
             axis_upper_bound = 100
 
         chart = (
@@ -300,8 +286,8 @@ with col2:
                 color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
                 tooltip=[
                     alt.Tooltip("Feature:N"),
-                    alt.Tooltip("Original_Mean:Q", format=".3f", title="Original Mean"),
-                    alt.Tooltip("Removed_Mean:Q", format=".3f", title="Removed Mean"),
+                    alt.Tooltip("Original_Mean:Q", format="1", title="Original Mean"),
+                    alt.Tooltip("Removed_Mean:Q", format=".1f", title="Removed Mean"),
                     alt.Tooltip("Diff_Percent:Q", format=".1f", title="% Change"),
                 ]
             )
