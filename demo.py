@@ -117,7 +117,7 @@ with col_title:
     st.title("SubCure Demo – Stress Testing Causal Claims")
 
 
-col1, col2 = st.columns([1.4, 1])
+col1, space, col2 = st.columns([1, 0.05, 1])
 
 # ===== LEFT SIDE: Dataset and Results =====
 with col1:
@@ -131,9 +131,7 @@ with col1:
         f"**Attributes:** {num_atts}"
     )
 
-    st.markdown("### 🎨 Visualizations")
-
-    st.markdown("**Outcome distribution by treatment**")
+    st.markdown("#### Outcome distribution by treatment")
 
     # Only plot if both selected columns exist and are numeric/categorical
     if treatment_col in df.columns and outcome_col in df.columns:
@@ -165,32 +163,6 @@ with col1:
     else:
         st.warning("Please select valid Treatment and Outcome columns.")
 
-    if len(confounders) > 0:
-        st.markdown("**Confounder balance**")
-        melt_list = []
-        for c in confounders:
-            grp = df.groupby(treatment_col)[c].mean().reset_index()
-            grp.columns = ["Treatment", "MeanValue"]
-            grp["Confounder"] = c
-            melt_list.append(grp)
-        bal_df = pd.concat(melt_list)
-        bal_df["Treatment"] = bal_df["Treatment"].astype(str).apply(lambda x: f"{treatment_col}: {x}")
-        conf_chart = (
-            alt.Chart(bal_df)
-            .mark_circle(size=90)
-            .encode(
-                x="MeanValue:Q",
-                y=alt.Y("Confounder:N", title=None),
-                color="Treatment:N",
-                tooltip=["Confounder", "Treatment", "MeanValue"],
-            )
-            .properties(height=30 * len(confounders))
-        )
-        st.altair_chart(conf_chart, use_container_width=True)
-
-
-# ===== RIGHT SIDE: Visualizations =====
-with col2:
     # If repair run
     if st.session_state.run_repair:
         st.markdown("### 🧾 Results Summary")
@@ -229,12 +201,16 @@ with col2:
             st.metric(f"runtime", f"{exec_time:.1f}s")
         with c2:
             st.metric("tuples removed", f"{pct_removed:.1f}%")
-            # st.metric("tuples removed", f"{n_removed} ({pct_removed:.1f}%)")
         with c3:
             st.metric("old causal effect", f"{current_ate:.1f}")
         with c4:
-            st.metric("new causal effect", f"{new_ate:.1f}")
+            if desired_center - tolerance <= new_ate <= desired_center + tolerance:
+                st.metric("new causal effect", f"{new_ate:.1f}", "inside the desired range")
+            else:
+                st.metric("new causal effect", f"{new_ate:.1f}", "outside the desired range", delta_color="inverse")
 
+    # ===== RIGHT SIDE: Visualizations =====
+    with col2:
         st.markdown("### 📉 Averages Percentage Change (Caused By Removals)")
         # Extract numeric columns that exist in both datasets
         removed_df = df.loc[df.index.difference(df_new.index)].copy()
@@ -259,17 +235,17 @@ with col2:
             })
 
         mean_df = pd.DataFrame(comparison_rows)
-        mean_df["AbsPctDiff"] = mean_df["Diff_Percent"].abs()
-        mean_df["Direction"] = mean_df["Diff_Percent"].apply(lambda x: "Positive" if x >= 0 else "Negative")
+        mean_df["AbsPctDiff"] = mean_df["Diff_Percent"]
+        # mean_df["Direction"] = mean_df["Diff_Percent"].apply(lambda x: "Positive" if x >= 0 else "Negative")
 
         plot_df = mean_df.copy()
 
         # Color scale red for negative, green for positive
-        color_scale = alt.Scale(
-            domain=["Positive", "Negative"],
-            range=["#4daf4a", "#e41a1c"]  # green, red
-        )
-        max_val = max(plot_df["AbsPctDiff"])
+        # color_scale = alt.Scale(
+        #     domain=["Positive", "Negative"],
+        #     range=["#4daf4a", "#e41a1c"]  # green, red
+        # )
+        max_val = max(plot_df["AbsPctDiff"].abs())
         if max_val > 0:
             axis_upper_bound = round(1.5 * max_val)
         else:
@@ -282,8 +258,8 @@ with col2:
                 x=alt.X("Feature:N",
                         sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
                         title="Feature"),
-                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[0, axis_upper_bound])),
-                color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
+                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
+                # color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
                 tooltip=[
                     alt.Tooltip("Feature:N"),
                     alt.Tooltip("Original_Mean:Q", format="1", title="Original Mean"),
@@ -294,6 +270,7 @@ with col2:
             .properties(
                 width=40 * len(plot_df),
                 height=450,
+                # padding={"bottom": 1}
             )
         )
 
@@ -307,10 +284,10 @@ with col2:
         st.markdown("## 🤖 Insights on Removed Subpopulation")
 
         with st.spinner("Generating interpretability insights..."):
-            try:
-                ai_text = ra.call_gpt_for_removed_analysis(results, diff)
-            except Exception as e:
-                ai_text = f"⚠️ GPT call failed: {e}"
-            # ai_text = f"⚠️ GPT call blocked - saving tokens for now"
+            # try:
+            #     ai_text = ra.call_gpt_for_removed_analysis(results, diff)
+            # except Exception as e:
+            #     ai_text = f"⚠️ GPT call failed: {e}"
+            ai_text = f"⚠️ GPT call blocked - saving tokens for now"
 
         st.write(ai_text)
