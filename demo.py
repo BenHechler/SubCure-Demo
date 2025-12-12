@@ -236,15 +236,8 @@ with col1:
 
         mean_df = pd.DataFrame(comparison_rows)
         mean_df["AbsPctDiff"] = mean_df["Diff_Percent"]
-        # mean_df["Direction"] = mean_df["Diff_Percent"].apply(lambda x: "Positive" if x >= 0 else "Negative")
-
         plot_df = mean_df.copy()
 
-        # Color scale red for negative, green for positive
-        # color_scale = alt.Scale(
-        #     domain=["Positive", "Negative"],
-        #     range=["#4daf4a", "#e41a1c"]  # green, red
-        # )
         max_val = max(plot_df["AbsPctDiff"].abs())
         if max_val > 0:
             axis_upper_bound = round(1.5 * max_val)
@@ -259,7 +252,6 @@ with col1:
                         sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
                         title="Feature"),
                 y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
-                # color=alt.Color("Direction:N", scale=color_scale, legend=alt.Legend(title="Direction")),
                 tooltip=[
                     alt.Tooltip("Feature:N"),
                     alt.Tooltip("Original_Mean:Q", format="1", title="Original Mean"),
@@ -276,18 +268,48 @@ with col1:
 
         st.altair_chart(chart, use_container_width=True)
 
-        if removed_df is None or removed_df.empty:
-            st.info("No removed tuples to analyze yet.")
-        else:
-            results, diff = ra.compute_removed_analysis(removed_df, df)
+        insight_df = plot_df.copy()
+        insight_df["abs_diff"] = insight_df["Diff_Percent"].abs()
+        insight_df = insight_df.sort_values(by="abs_diff", ascending=False).reset_index(drop=True)
+        # st.dataframe(insight_df)
 
-        st.markdown("## 🤖 Insights on Removed Subpopulation")
+        top_changes = f"""
+        """
 
-        with st.spinner("Generating interpretability insights..."):
-            # try:
-            #     ai_text = ra.call_gpt_for_removed_analysis(results, diff)
-            # except Exception as e:
-            #     ai_text = f"⚠️ GPT call failed: {e}"
-            ai_text = f"⚠️ GPT call blocked - saving tokens for now"
+        for i in range(5):
+            feature_name = insight_df.loc[i, "Feature"]
+            feature_change = round(insight_df.loc[i, "Diff_Percent"], 1)
+            increase_or_decrease = "increased by" if feature_change > 0 else " decreased by"
+            abs_feature_change = abs(feature_change)
+            old = round(insight_df.loc[i, "Original_Mean"], 1)
+            new = round(insight_df.loc[i, "Removed_Mean"], 1)
 
-        st.write(ai_text)
+            added_text = f"""
+{i+1}. {feature_name} {increase_or_decrease} {abs_feature_change}% (from {old} to {new})
+"""
+            top_changes += added_text
+
+        # 1. {insight_df.loc[0, "Feature"]}: {round(insight_df.loc[0, "Diff_Percent"],1)}% change.
+        # 2. {insight_df.loc[1, "Feature"]}: {round(insight_df.loc[1, "Diff_Percent"],1)}%
+        # """
+
+        st.markdown("### 🧠 Insights on Removed Subpopulation")
+        st.markdown("##### Top 5 most significant feature shifts:")
+        st.write(top_changes)
+
+        # AI block
+        # if removed_df is None or removed_df.empty:
+        #     st.info("No removed tuples to analyze yet.")
+        # else:
+        #     results, diff = ra.compute_removed_analysis(removed_df, df)
+        #
+        # st.markdown("## 🤖 Insights on Removed Subpopulation")
+        #
+        # with st.spinner("Generating interpretability insights..."):
+        #     # try:
+        #     #     ai_text = ra.call_gpt_for_removed_analysis(results, diff)
+        #     # except Exception as e:
+        #     #     ai_text = f"⚠️ GPT call failed: {e}"
+        #     ai_text = f"⚠️ GPT call blocked - saving tokens for now"
+        #
+        # st.write(ai_text)
