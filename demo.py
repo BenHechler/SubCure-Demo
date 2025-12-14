@@ -26,6 +26,10 @@ for k, v in defaults.items():
 if "new_ate" not in st.session_state:
     st.session_state.new_ate = None
 
+if "ate_computed" not in st.session_state:
+    st.session_state.ate_computed = False
+
+
 st.sidebar.title("⚙️ Controls")
 
 dataset_name = st.sidebar.selectbox(
@@ -64,6 +68,7 @@ if "ate_val" not in st.session_state:
 
 if st.sidebar.button("Compute causal effect"):
     st.session_state.ate_val = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
+    st.session_state.ate_computed = True
 
 if st.session_state.ate_val is not None:
     st.sidebar.markdown(
@@ -119,8 +124,30 @@ with col_title:
 
 col1, space, col2 = st.columns([1, 0.05, 1])
 
+
+acs_message = f"""##### Current state: people with a disability earn {round(current_ate, 1)} more than people without disability on average"""
+acs_message2 = f"""##### Goal: change the causal effect from {round(current_ate, 1)} to {round(desired_center,1)}"""
+credit_message = "to do 1"
+credit_message2 = "to do q"
+twins_message = "to do 2"
+twins_message2 = "to do w"
+so_message = "to do 3"
+so_message2 = "to do e"
+goal_dict = {"ACS": acs_message, "Credit": credit_message, "Twins": twins_message, "Stack Overflow": so_message}
+goal_dict2 = {"ACS": acs_message2, "Credit": credit_message2, "Twins": twins_message2, "Stack Overflow": so_message2}
+
+
 # ===== LEFT SIDE: Dataset and Results =====
 with col1:
+    if current_ate and desired_center:
+        if dataset_name != "Upload CSV":
+            goal_m = goal_dict.get(dataset_name)
+            goal_m2 = goal_dict2.get(dataset_name)
+            if st.session_state.ate_computed:
+                st.markdown(goal_m)
+                if round(current_ate, 1) != round(desired_center, 1):
+                    st.markdown(goal_m2)
+
     st.markdown("### 📊 Dataset Preview")
     st.dataframe(df.head(), use_container_width=True, height=180)
 
@@ -162,6 +189,9 @@ with col1:
             st.info("Too many treatment levels to visualize effectively.")
     else:
         st.warning("Please select valid Treatment and Outcome columns.")
+
+    # ai_text = ra.ai_dataset_one_liner(df, treatment_col, outcome_col)
+    # st.write(ai_text)
 
     # If repair run
     if st.session_state.run_repair:
@@ -211,91 +241,88 @@ with col1:
 
     # ===== RIGHT SIDE: Visualizations =====
     with col2:
-        st.markdown("### 📉 Averages Percentage Change (Caused By Removals)")
-        # Extract numeric columns that exist in both datasets
-        removed_df = df.loc[df.index.difference(df_new.index)].copy()
+        if st.session_state.run_repair:
+            st.markdown("### 📉 Averages Percentage Change (Caused By Removals)")
+            # Extract numeric columns that exist in both datasets
+            removed_df = df.loc[df.index.difference(df_new.index)].copy()
 
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        numeric_cols = [c for c in numeric_cols if c in removed_df.columns]
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_cols = [c for c in numeric_cols if c in removed_df.columns]
 
-        comparison_rows = []
-        for col in numeric_cols:
-            orig = df[col].mean()
-            rem = removed_df[col].mean()
-            if orig == 0:
-                pct_diff = np.nan
+            comparison_rows = []
+            for col in numeric_cols:
+                orig = df[col].mean()
+                rem = removed_df[col].mean()
+                if orig == 0:
+                    pct_diff = np.nan
+                else:
+                    pct_diff = ((rem - orig) / abs(orig)) * 100
+
+                comparison_rows.append({
+                    "Feature": col,
+                    "Original_Mean": orig,
+                    "Removed_Mean": rem,
+                    "Diff_Percent": pct_diff
+                })
+
+            mean_df = pd.DataFrame(comparison_rows)
+            mean_df["AbsPctDiff"] = mean_df["Diff_Percent"]
+            plot_df = mean_df.copy()
+
+            max_val = max(plot_df["AbsPctDiff"].abs())
+            if max_val > 0:
+                axis_upper_bound = round(1.5 * max_val)
             else:
-                pct_diff = ((rem - orig) / abs(orig)) * 100
+                axis_upper_bound = 100
 
-            comparison_rows.append({
-                "Feature": col,
-                "Original_Mean": orig,
-                "Removed_Mean": rem,
-                "Diff_Percent": pct_diff
-            })
-
-        mean_df = pd.DataFrame(comparison_rows)
-        mean_df["AbsPctDiff"] = mean_df["Diff_Percent"]
-        plot_df = mean_df.copy()
-
-        max_val = max(plot_df["AbsPctDiff"].abs())
-        if max_val > 0:
-            axis_upper_bound = round(1.5 * max_val)
-        else:
-            axis_upper_bound = 100
-
-        chart = (
-            alt.Chart(plot_df)
-            .mark_bar()
-            .encode(
-                x=alt.X("Feature:N",
-                        sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
-                        title="Feature"),
-                y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
-                tooltip=[
-                    alt.Tooltip("Feature:N"),
-                    alt.Tooltip("Original_Mean:Q", format="1", title="Original Mean"),
-                    alt.Tooltip("Removed_Mean:Q", format=".1f", title="Removed Mean"),
-                    alt.Tooltip("Diff_Percent:Q", format=".1f", title="% Change"),
-                ]
+            chart = (
+                alt.Chart(plot_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Feature:N",
+                            sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
+                            title="Feature"),
+                    y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
+                    tooltip=[
+                        alt.Tooltip("Feature:N"),
+                        alt.Tooltip("Original_Mean:Q", format="1", title="Original Mean"),
+                        alt.Tooltip("Removed_Mean:Q", format=".1f", title="Removed Mean"),
+                        alt.Tooltip("Diff_Percent:Q", format=".1f", title="% Change"),
+                    ]
+                )
+                .properties(
+                    width=40 * len(plot_df),
+                    height=450,
+                    # padding={"bottom": 1}
+                )
             )
-            .properties(
-                width=40 * len(plot_df),
-                height=450,
-                # padding={"bottom": 1}
-            )
-        )
 
-        st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, use_container_width=True)
 
-        insight_df = plot_df.copy()
-        insight_df["abs_diff"] = insight_df["Diff_Percent"].abs()
-        insight_df = insight_df.sort_values(by="abs_diff", ascending=False).reset_index(drop=True)
-        # st.dataframe(insight_df)
+            insight_df = plot_df.copy()
+            insight_df["abs_diff"] = insight_df["Diff_Percent"].abs()
+            insight_df = insight_df.sort_values(by="abs_diff", ascending=False).reset_index(drop=True)
+            # st.dataframe(insight_df)
 
-        top_changes = f"""
-        """
+            top_changes = f"""
+            """
 
-        for i in range(5):
-            feature_name = insight_df.loc[i, "Feature"]
-            feature_change = round(insight_df.loc[i, "Diff_Percent"], 1)
-            increase_or_decrease = "increased by" if feature_change > 0 else " decreased by"
-            abs_feature_change = abs(feature_change)
-            old = round(insight_df.loc[i, "Original_Mean"], 1)
-            new = round(insight_df.loc[i, "Removed_Mean"], 1)
+            for i in range(5):
+                feature_name = insight_df.loc[i, "Feature"]
+                feature_change = round(insight_df.loc[i, "Diff_Percent"], 1)
+                increase_or_decrease = "increased by" if feature_change > 0 else " decreased by"
+                abs_feature_change = abs(feature_change)
+                old = round(insight_df.loc[i, "Original_Mean"], 1)
+                new = round(insight_df.loc[i, "Removed_Mean"], 1)
 
-            added_text = f"""
-{i+1}. {feature_name} {increase_or_decrease} {abs_feature_change}% (from {old} to {new})
-"""
-            top_changes += added_text
+                added_text = f"""
+    {i+1}. {feature_name} {increase_or_decrease} {abs_feature_change}% (from {old} to {new})
+    """
+                top_changes += added_text
 
-        # 1. {insight_df.loc[0, "Feature"]}: {round(insight_df.loc[0, "Diff_Percent"],1)}% change.
-        # 2. {insight_df.loc[1, "Feature"]}: {round(insight_df.loc[1, "Diff_Percent"],1)}%
-        # """
-
-        st.markdown("### 🧠 Insights on Removed Subpopulation")
-        st.markdown("##### Top 5 most significant feature shifts:")
-        st.write(top_changes)
+            st.markdown("### 🧠 Insights on Removed Subpopulation")
+            st.markdown("##### Top 5 most significant feature shifts:")
+            st.write(top_changes)
 
         # AI block
         # if removed_df is None or removed_df.empty:

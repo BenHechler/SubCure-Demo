@@ -95,3 +95,44 @@ Give a structured bullet-point summary.
     )
 
     return response.choices[0].message.content
+
+
+# @st.cache_data(show_spinner=False)
+def ai_dataset_one_liner(df: pd.DataFrame, treatment, outcome) -> str:
+    info = {
+        "rows": len(df),
+        "columns": list(df.columns),
+        "dtypes": {c: str(t) for c, t in df.dtypes.items()},
+        "sample": df.head(3).to_dict(orient="records"),
+    }
+
+    prompt = f"""
+Write ONE short, natural sentence that a human would say when briefly explaining this dataset.
+It should sound casual and neutral, not academic and not AI-generated. 
+
+Rules:
+- Start with "This dataset"
+- Do NOT mention "analysis", "causal inference", or "model"
+- Do NOT explain methodology
+- No buzzwords
+- Max 18 words
+- Describe the most meaningful features in the dataset considering the treatment is {treatment} and the outcome is {outcome}
+- Plain English
+
+Context:
+{info}
+
+Only return the sentence.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You write natural, human-sounding descriptions."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.4,  # slightly higher → more human
+        max_tokens=35,
+    )
+
+    return response.choices[0].message.content.strip()
