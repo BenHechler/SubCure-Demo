@@ -81,7 +81,8 @@ else:
 current_ate = estimate_ate_linear(df, treatment_col, outcome_col, confounders)
 desired_center = st.sidebar.number_input(
     "Desired causal effect",
-    value=float(np.round(current_ate, 3))
+    value=float(np.round(current_ate, 3)),
+    step=1.0
 )
 
 tolerance_percanteges = st.sidebar.slider(
@@ -125,16 +126,13 @@ with col_title:
 col1, space, col2 = st.columns([1, 0.05, 1])
 
 
-acs_message = f"""##### Current state: people with a disability earn {round(current_ate, 1)} more than people without disability on average"""
-acs_message2 = f"""##### Goal: change the causal effect from {round(current_ate, 1)} to {round(desired_center,1)}"""
-credit_message = "to do 1"
-credit_message2 = "to do q"
-twins_message = "to do 2"
-twins_message2 = "to do w"
-so_message = "to do 3"
-so_message2 = "to do e"
+acs_message = f"""##### Current state: people without a disability earn {round(current_ate, 1)} more than people with disability on average"""
+credit_message = f"""##### Current state: people without a house has {round(current_ate, 1)} higher credit risk than people without a house on average"""
+so_message = f"""##### Current state: people without a formal education earn {abs(round(current_ate, 1))} less than people with a formal education on average"""
+twins_message = f"""##### Current state: people without a heavier twin has {abs(round(current_ate, 1))} less mortality than people with heavier twin on average"""
+# twins_message = "to do 2"
 goal_dict = {"ACS": acs_message, "Credit": credit_message, "Twins": twins_message, "Stack Overflow": so_message}
-goal_dict2 = {"ACS": acs_message2, "Credit": credit_message2, "Twins": twins_message2, "Stack Overflow": so_message2}
+message2 = f"""##### Goal: change the causal effect from {round(current_ate, 1)} to {round(desired_center,1)}"""
 
 
 # ===== LEFT SIDE: Dataset and Results =====
@@ -142,11 +140,10 @@ with col1:
     if current_ate and desired_center:
         if dataset_name != "Upload CSV":
             goal_m = goal_dict.get(dataset_name)
-            goal_m2 = goal_dict2.get(dataset_name)
             if st.session_state.ate_computed:
                 st.markdown(goal_m)
                 if round(current_ate, 1) != round(desired_center, 1):
-                    st.markdown(goal_m2)
+                    st.markdown(message2)
 
     st.markdown("### 📊 Dataset Preview")
     st.dataframe(df.head(), use_container_width=True, height=180)
@@ -281,7 +278,7 @@ with col1:
                 .encode(
                     x=alt.X("Feature:N",
                             sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
-                            title="Feature"),
+                            axis=alt.Axis(labelFontSize=13.5, titleFontSize=16, labelAngle=-45)),
                     y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
                     tooltip=[
                         alt.Tooltip("Feature:N"),
@@ -292,7 +289,7 @@ with col1:
                 )
                 .properties(
                     width=40 * len(plot_df),
-                    height=450,
+                    height=550,
                     # padding={"bottom": 1}
                 )
             )
@@ -320,23 +317,9 @@ with col1:
     """
                 top_changes += added_text
 
-            st.markdown("### 🧠 Insights on Removed Subpopulation")
-            st.markdown("##### Top 5 most significant feature shifts:")
-            st.write(top_changes)
-
-        # AI block
-        # if removed_df is None or removed_df.empty:
-        #     st.info("No removed tuples to analyze yet.")
-        # else:
-        #     results, diff = ra.compute_removed_analysis(removed_df, df)
-        #
-        # st.markdown("## 🤖 Insights on Removed Subpopulation")
-        #
-        # with st.spinner("Generating interpretability insights..."):
-        #     # try:
-        #     #     ai_text = ra.call_gpt_for_removed_analysis(results, diff)
-        #     # except Exception as e:
-        #     #     ai_text = f"⚠️ GPT call failed: {e}"
-        #     ai_text = f"⚠️ GPT call blocked - saving tokens for now"
-        #
-        # st.write(ai_text)
+            if max_val > 0:
+                st.markdown("### 🧠 Insights on Removed Subpopulation")
+                st.markdown("##### Top 5 most significant feature shifts:")
+                st.write(top_changes)
+            else:
+                st.markdown("### No records has been removed!")

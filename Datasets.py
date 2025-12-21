@@ -18,6 +18,16 @@ def load_ACS_dataset():
     outcome = "Wages or salary income past 12 months"
     df = load_dataset("acs", treatment, outcome)
     del df['Unnamed: 0']
+    df = df.rename(columns={
+        "Wages or salary income past 12 months": "Wages",
+        "With a disability": "No disability",
+        "Educational attainment": "Education",
+        "Public health coverage": "Public insurance",
+        "Private health insurance coverage": "Private insurance",
+        "Medicare, for people 65 and older, or people with certain disabilities": "Medicare",
+        "Insurance through a current or former employer or union": "Work insurance"
+    })
+    df["No disability"] = df["No disability"].map({1: 0, 2: 1})
     return df
 
 
