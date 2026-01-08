@@ -51,7 +51,7 @@ def load_dataset(name, treatment, outcome):
     data_dir = root / "Data"
     name += ".csv"
     full_path = data_dir / name
-    df = pd.read_csv(full_path).head(1000)
+    df = pd.read_csv(full_path).head(5000)
     cols = [treatment, outcome] + [c for c in df.columns if c not in [treatment, outcome]]
     df = df[cols]
     return df

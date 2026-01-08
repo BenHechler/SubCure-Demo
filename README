@@ -1,2 +1,80 @@
+SubCure: Stress-Testing Causal Claims via Data Repair
+SubCure is an interactive system for stress-testing causal claims derived from observational data. Rather than validating a causal estimate directly, SubCure probes its robustness by identifying small, targeted data modifications that can significantly alter the estimated Average Treatment Effect (ATE).
+The system exposes how sensitive a causal conclusion is to individual records or structured subpopulations, helping users understand which data supports the claim and why.
+
+Motivation
+Causal analyses based on observational data are widely used in high-stakes domains such as healthcare, economics, and public policy. These analyses typically rely on assumptions about confounding, data quality, and robustness.
+In practice:
+•	A small subset of records may disproportionately drive causal estimates.
+•	Certain subpopulations may encode unintended bias.
+•	Standard robustness checks often fail to explain which data points matter and how they affect the result.
+SubCure is designed to make these dependencies explicit and inspectable.
+
+System Overview
+Given a dataset and a causal query (treatment, outcome, confounders), SubCure:
+1	Computes a baseline ATE, representing the current causal claim.
+2	Allows the user to specify a target ATE and tolerance.
+3	Applies a data repair strategy that removes as little data as possible to shift the ATE toward the target.
+4	Analyzes and reports structural patterns among the removed data.
+The implementation is estimator-agnostic. The current prototype uses a linear regression estimator for ATE computation, but alternative estimators can be integrated without changing the repair logic.
+
+Repair Strategies
+SubCure supports two complementary repair modes:
+Tuple-Level Repair
+Removes individual records whose removal most efficiently shifts the ATE.
+•	Fine-grained
+•	Minimal data loss
+•	Useful for detecting influential outliers
+Pattern-Level Repair
+Removes entire subpopulations defined by shared attribute values (e.g., age group, gender).
+•	Coarser but more interpretable
+•	Highlights structural dependencies
+•	Useful for identifying subgroup sensitivity and bias
+
+Removed-Tuple Analysis
+After a repair is applied, SubCure analyzes the removed data to explain why the causal estimate changed.
+This includes:
+•	Over-represented categorical values
+•	Statistical shifts in numeric features
+•	Common attribute patterns among removed records
+These summaries help translate causal fragility into domain-relevant insights.
+
+How to Use the System
+SubCure is provided as an interactive Streamlit application.
+Step 1: Load a Dataset
+•	Select a built-in dataset (e.g., ACS, German Credit, Twins), or
+•	Upload a custom CSV file.
+Step 2: Define the Causal Query
+Select:
+•	Treatment variable
+•	Outcome variable
+•	Confounders (variables affecting both treatment and outcome)
+SubCure immediately computes and displays the baseline ATE.
+Step 3: Specify a Target ATE
+•	Set a desired ATE value and tolerance range.
+•	This defines an alternative causal outcome used to test robustness.
+Step 4: Choose a Repair Strategy
+•	Select tuple-level or pattern-level repair.
+•	Optionally limit the maximum number of records to remove.
+Step 5: Run the Repair
+SubCure:
+•	Applies the repair strategy,
+•	Shifts the ATE toward the target,
+•	Reports the new ATE and the number of removed records.
+Step 6: Interpret the Results
+The interface displays:
+•	Original vs. repaired ATE
+•	Summary statistics of removed records
+•	Common attribute patterns among removed tuples
+These outputs help explain which parts of the data were most influential.
+
+Quick Start
+Install Dependencies
+Create a virtual environment (recommended) and install requirements:
+
+pip install -r requirements.txt
+Run the Application
+Launch the interactive demo:
+
 run this command - .\venv\Scripts\python.exe -m streamlit run .\demo.py
-opens the browser in http://localhost:8501/
+This opens the SubCure UI in your browser in http://localhost:8501/
