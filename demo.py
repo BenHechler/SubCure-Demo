@@ -4,7 +4,6 @@ import numpy as np
 import altair as alt
 from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
-import removed_analysis as ra
 
 import time
 st.set_page_config(page_title="SubCure Demo", layout="wide")
@@ -117,7 +116,7 @@ if st.session_state.new_ate is not None:
 col_logo, col_title = st.columns([0.2, 4])
 
 with col_logo:
-    st.image("subcure_logo_2.png", width=120)
+    st.image("subcure_logo.png", width=120)
 
 with col_title:
     st.title("SubCure Demo – Stress Testing Causal Claims")
