@@ -1,11 +1,11 @@
+import time
+import altair as alt
+import numpy as np
 import streamlit as st
 import pandas as pd
-import numpy as np
-import altair as alt
 from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, load_SO_dataset
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
 
-import time
 st.set_page_config(page_title="SubCure Demo", layout="wide")
 
 # ---------------------- SESSION STATE DEFAULTS ----------------------
