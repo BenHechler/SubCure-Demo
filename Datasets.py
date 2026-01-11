@@ -19,7 +19,7 @@ def load_ACS_dataset():
     df = load_dataset("acs", treatment, outcome)
     del df['Unnamed: 0']
     df = df.rename(columns={
-        "Wages or salary income past 12 months": "Wages",
+        "Wages or salary income past 12 months": "Annual wage",
         "With a disability": "No disability",
         "Educational attainment": "Education",
         "Public health coverage": "Public insurance",

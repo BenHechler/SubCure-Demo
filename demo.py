@@ -7,6 +7,73 @@ from Datasets import load_ACS_dataset, load_twins_dataset, load_german_dataset, 
 from Algorithms import subcure_tuple, subcure_pattern, estimate_ate_linear
 
 st.set_page_config(page_title="SubCure Demo", layout="wide")
+st.markdown(
+    """
+    <style>
+    # html, body, [class*="css"]  {
+    #     font-size: 22px !important;
+    # }
+    # 
+    # .stMarkdown, .stText {
+    #     font-size: 22px !important;
+    #     line-height: 1.6;
+    # }
+    # 
+    # /* Titles */
+    # h1 {
+    #     font-size: 48px !important;
+    # }
+    # h2 {
+    #     font-size: 40px !important;
+    # }
+    # h3 {
+    #     font-size: 34px !important;
+    # }
+    # h4 {
+    #     font-size: 30px !important;
+    # }
+    # h5 {
+    #     font-size: 28px !important;
+    # }
+    # 
+    # /* Sidebar text */
+    # section[data-testid="stSidebar"] * {
+    #     font-size: 20px !important;
+    # }
+    # 
+    # /* Buttons */
+    # button {
+    #     font-size: 20px !important;
+    #     padding: 0.6em 1.2em !important;
+    # }
+    # 
+    # /* DataFrame */
+    # .stDataFrame {
+    #     font-size: 22px !important;
+    # }
+
+    /* Metric value (big number) */
+    [data-testid="stMetricValue"] {
+        font-size: 42px !important;
+        font-weight: 600 !important;
+    }
+
+    /* Metric label (title) */
+    [data-testid="stMetricLabel"] {
+        font-size: 38px !important;
+    }
+
+    /* Metric delta text */
+    [data-testid="stMetricDelta"] {
+        font-size: 15px !important;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+alt.themes.enable("none")
 
 # ---------------------- SESSION STATE DEFAULTS ----------------------
 defaults = {
@@ -172,8 +239,8 @@ with col1:
                 alt.Chart(chart_data)
                 .mark_bar(opacity=0.6)
                 .encode(
-                    alt.X("Outcome:Q", bin=alt.Bin(maxbins=30), title="Outcome"),
-                    alt.Y("count()", stack=None, title="Count"),
+                    alt.X("Outcome:Q", bin=alt.Bin(maxbins=30), title="Outcome", axis=alt.Axis(labelFontSize=16, titleFontSize=20)),
+                    alt.Y("count()", stack=None, title="Count", axis=alt.Axis(labelFontSize=16, titleFontSize=20)),
                     color=alt.Color("Treatment:N", title="Treatment"),
                     tooltip=["Treatment", "count()"],
                 )
@@ -185,11 +252,9 @@ with col1:
     else:
         st.warning("Please select valid Treatment and Outcome columns.")
 
-
     # If repair run
     if st.session_state.run_repair:
         st.markdown("### 🧾 Results Summary")
-
         start_time = time.time()
 
         if algorithm.startswith("Tuple"):
@@ -274,7 +339,7 @@ with col1:
                 .encode(
                     x=alt.X("Feature:N",
                             sort=plot_df["AbsPctDiff"].sort_values(ascending=False).index.tolist(),
-                            axis=alt.Axis(labelFontSize=13.5, titleFontSize=16, labelAngle=-45)),
+                            axis=alt.Axis(labelFontSize=13, labelAngle=-50, labelFontWeight="bolder")),
                     y=alt.Y("AbsPctDiff:Q", title="Percentage Change (%)", scale=alt.Scale(domain=[-axis_upper_bound, axis_upper_bound])),
                     tooltip=[
                         alt.Tooltip("Feature:N"),
@@ -285,8 +350,7 @@ with col1:
                 )
                 .properties(
                     width=40 * len(plot_df),
-                    height=550,
-                    # padding={"bottom": 1}
+                    height=550
                 )
             )
 
@@ -295,8 +359,7 @@ with col1:
             insight_df = plot_df.copy()
             insight_df["abs_diff"] = insight_df["Diff_Percent"].abs()
             insight_df = insight_df.sort_values(by="abs_diff", ascending=False).reset_index(drop=True)
-            top_changes = f"""
-            """
+            top_changes = f""""""
 
             for i in range(5):
                 feature_name = insight_df.loc[i, "Feature"]
