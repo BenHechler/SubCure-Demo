@@ -129,7 +129,6 @@ acs_message = f"""##### Current state: people without a disability earn {round(c
 credit_message = f"""##### Current state: people without a house has {round(current_ate, 1)} higher credit risk than people without a house on average"""
 so_message = f"""##### Current state: people without a formal education earn {abs(round(current_ate, 1))} less than people with a formal education on average"""
 twins_message = f"""##### Current state: people without a heavier twin has {abs(round(current_ate, 1))} less mortality than people with heavier twin on average"""
-# twins_message = "to do 2"
 goal_dict = {"ACS": acs_message, "Credit": credit_message, "Twins": twins_message, "Stack Overflow": so_message}
 message2 = f"""##### Goal: change the causal effect from {round(current_ate, 1)} to {round(desired_center,1)}"""
 
@@ -186,8 +185,6 @@ with col1:
     else:
         st.warning("Please select valid Treatment and Outcome columns.")
 
-    # ai_text = ra.ai_dataset_one_liner(df, treatment_col, outcome_col)
-    # st.write(ai_text)
 
     # If repair run
     if st.session_state.run_repair:
@@ -298,8 +295,6 @@ with col1:
             insight_df = plot_df.copy()
             insight_df["abs_diff"] = insight_df["Diff_Percent"].abs()
             insight_df = insight_df.sort_values(by="abs_diff", ascending=False).reset_index(drop=True)
-            # st.dataframe(insight_df)
-
             top_changes = f"""
             """
 

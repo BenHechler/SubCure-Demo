@@ -51,21 +51,7 @@ def load_dataset(name, treatment, outcome):
     data_dir = root / "Data"
     name += ".csv"
     full_path = data_dir / name
-    df = pd.read_csv(full_path).head(5000)
+    df = pd.read_csv(full_path).head(1000)
     cols = [treatment, outcome] + [c for c in df.columns if c not in [treatment, outcome]]
     df = df[cols]
     return df
-
-
-
-#     "Twins": {
-#         "description": "Heavier twin → mortality.",
-#         "treatment": "Heavier twin",
-#         "outcome": "Mortality",
-#         "confounders": "Gestational age, birth weight, prenatal care, abnormal amniotic fluid, induced labor, gender, maternal marital status, year of birth, previous deliveries",
-#         "org_ate": "-0.016",
-#         "tar_ate": "0 (±0.001)",
-#         "#tuples": "23,968",
-#         "#atts": "53",
-#     },
-
